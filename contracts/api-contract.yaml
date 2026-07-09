@@ -26,6 +26,15 @@ info:
         baseline per instructions to capture only existing MERGED backend
         API behavior. It will be added as a contract update once merged.
 
+    x-changelog:
+      - update: SLICE-09 Approvals module added (paths under /approvals/*
+          and their schemas). Source: backend branch
+          agent/slice-09-approvals-queue (src/approvals/**), not yet
+          merged to main at documentation time — added ahead of merge per
+          explicit instruction so the contract reflects the real,
+          implemented API behavior. Reconcile x-source-snapshot.commit
+          above once this branch merges.
+
     x-global-behavior: |
       - No global path prefix is set in main.ts (no app.setGlobalPrefix()).
       - app.enableCors() is called with no options (permissive default CORS).
@@ -57,6 +66,7 @@ tags:
   - name: promotions
   - name: discount-models
   - name: price-scenarios
+  - name: approvals
 
 paths:
   /health:
@@ -954,6 +964,194 @@ paths:
                 $ref: "#/components/schemas/ScenarioEntity"
         "400":
           $ref: "#/components/responses/BadRequestNonNumericId"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /approvals/queue:
+    get:
+      operationId: getApprovalsQueue
+      tags: [approvals]
+      summary: List pending price scenarios and discount models awaiting decision
+      description: >
+        Aggregated on every read from PriceScenariosService.findAll() and
+        DiscountModelingService.findAll(), filtered to status === "pending".
+        Not persisted — there is no separate Approvals-owned store for
+        queue membership. submitter/team/brand/division on each item are
+        v1 deterministic placeholders rotated by id (SUBMITTER_ROSTER,
+        3 entries, `id % 3`), NOT real submitter identity — no
+        identity-provider integration exists.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApprovalsQueueView"
+
+  /approvals/decided:
+    get:
+      operationId: getApprovalsDecided
+      tags: [approvals]
+      summary: List price scenarios and discount models that have been decided
+      description: >
+        Same aggregation as /approvals/queue, filtered to
+        status in ("approved", "denied", "returned") — i.e. everything
+        except "pending", "new", and "draft".
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApprovalsDecidedView"
+
+  /approvals/scenarios/{id}/review:
+    get:
+      operationId: getApprovalScenarioReview
+      tags: [approvals]
+      summary: Get the full scenario output for approval-mode review
+      description: >
+        Reuses ScenarioEntity.output from SLICE-07 as-is (no separate
+        Approvals-owned review record). x-note: mirrors the
+        /price-scenarios/{id}/deep-dive 404 ambiguity — scenario id
+        unknown and scenario-exists-but-not-yet-run (output is null)
+        BOTH return 404, distinguished only by message text.
+      parameters:
+        - $ref: "#/components/parameters/ScenarioIdPath"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScenarioReviewView"
+        "400":
+          $ref: "#/components/responses/BadRequestNonNumericId"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /approvals/discounts/{id}/review:
+    get:
+      operationId: getApprovalDiscountReview
+      tags: [approvals]
+      summary: Get the discount model's risk banner and impact for approval-mode review
+      description: >
+        Deliberately omits an itemized guardrail-compliance list and
+        SKU-level price breakdown (unlike the scenario review) per
+        REQ-APPR-009. competitiveFlags is always an empty array in v1 —
+        no competitive-price integration exists. constraintWarnings and
+        riskBanner.advisoryCount both use `severity !== "low"` as the
+        signal for a discount model's RiskPanel[]; riskBanner.hardCount
+        uses `isHard === true` instead — a panel can be isHard:true with
+        severity:"low" (e.g. Margin Risk at low discount depth), in which
+        case it is counted in hardCount but NOT in advisoryCount or
+        constraintWarnings.
+      parameters:
+        - $ref: "#/components/parameters/DiscountModelIdPath"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DiscountReviewView"
+        "400":
+          $ref: "#/components/responses/BadRequestNonNumericId"
+        "404":
+          description: Discount model id unknown, OR the model exists but has not been run yet (output is null). Both cases return 404, distinguished only by message text.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /approvals/scenarios/{id}/decision:
+    post:
+      operationId: decideApprovalScenario
+      tags: [approvals]
+      summary: Approve, deny, or request changes on a pending price scenario
+      description: >
+        Maps action to the underlying SLICE-07 status machine: "approve"
+        -> "approved", "deny" -> "denied", anything else (including
+        "request_changes" AND any unrecognized string) -> "returned".
+        x-note: action is a plain TS union with ZERO runtime enum
+        validation — mapActionToStatus falls through to "returned" for
+        any value that isn't exactly "approve" or "deny". comment
+        validation runs BEFORE the underlying id lookup, so an invalid id
+        combined with a missing comment yields 400, not 404. One
+        consistent reason-required policy (REQ-APPR-012, resolved
+        2026-07-09): comment must be non-empty after trim() for every
+        action except "approve"; enforced only server-side here (the
+        frontend additionally disables the confirm button client-side).
+        The deny reason itself is NOT persisted on ScenarioEntity — it is
+        recorded only in ApprovalsService's in-memory decision log
+        (process-wide, not exposed via any GET endpoint) and is lost on
+        process restart. Only "request_changes" (mapped to "returned")
+        appends to ScenarioEntity.changeRequests, matching SLICE-07's
+        existing updateStatus behavior.
+      parameters:
+        - $ref: "#/components/parameters/ScenarioIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DecisionDto"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApprovalItemView"
+        "400":
+          description: >
+            Non-numeric id, OR comment missing/blank for a non-"approve"
+            action (checked first, before the id lookup).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /approvals/discounts/{id}/decision:
+    post:
+      operationId: decideApprovalDiscount
+      tags: [approvals]
+      summary: Approve, deny, or request changes on a pending discount model
+      description: >
+        Same action-to-status mapping and reason-required policy as the
+        scenario decision endpoint. x-note: DiscountModelEntity (SLICE-06)
+        has NO changeRequests field (unlike ScenarioEntity) — the
+        discount's change-request/comment history shown in
+        ApprovalItemView.changeRequests is derived entirely from
+        ApprovalsService's own in-memory decision log filtered to
+        action === "request_changes", NOT from the underlying entity.
+        This history is lost on process restart and is a workaround
+        specific to this endpoint, not a SLICE-06 contract change.
+      parameters:
+        - $ref: "#/components/parameters/DiscountModelIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DecisionDto"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApprovalItemView"
+        "400":
+          description: >
+            Non-numeric id, OR comment missing/blank for a non-"approve"
+            action (checked first, before the id lookup).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "404":
           $ref: "#/components/responses/NotFound"
 
@@ -2074,3 +2272,160 @@ components:
           items:
             $ref: "#/components/schemas/DiscountTile"
           description: Always 5 entries (UNLOCK_LEVELS = [0,20,40,60,80]).
+
+    ApprovalItemView:
+      type: object
+      description: >
+        Tier-2, computed on read from a ScenarioEntity or
+        DiscountModelEntity — not a persisted Tier-1 entity.
+      required: [domain, id, name, submitter, team, brand, division, impact, risk, status, changeRequests]
+      properties:
+        domain:
+          type: string
+          enum: [scenario, discount]
+        id:
+          type: integer
+          description: The underlying ScenarioEntity.id or DiscountModelEntity.id.
+        name:
+          type: string
+        submitter:
+          type: string
+          description: v1 placeholder — rotated from a fixed 3-entry roster by `id % 3`. Not real submitter identity.
+        team:
+          type: string
+          description: v1 placeholder, paired with submitter.
+        brand:
+          type: string
+          description: v1 placeholder, paired with submitter.
+        division:
+          type: string
+          description: v1 placeholder, paired with submitter.
+        impact:
+          type: string
+          description: >
+            scenario: the "Rev Uplift" comparison-row value (e.g. "+12.3%").
+            discount: kpis.revenueImpact formatted as
+            `(sign)$(rounded, thousands-separated)`.
+        risk:
+          type: string
+          enum: [Low, Medium, High]
+          description: >
+            discount: High if any RiskPanel.isHard, else Medium if any
+            panel exists, else Low. scenario: falls back to the existing
+            "Inventory Risk" comparison-row value (Low/Medium/High) —
+            there is no dedicated $ inventory-risk-reduction metric in
+            the v1 placeholder engine, so REQ-APPR-011's literal
+            $10M/$5M thresholds are NOT implemented as stated.
+        status:
+          type: string
+          enum: [pending, approved, denied, returned]
+          description: Mirrors the underlying entity's status field verbatim.
+        changeRequests:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChangeRequest"
+          description: >
+            scenario: ScenarioEntity.changeRequests, read through
+            unmodified. discount: NOT from the underlying entity (which
+            has no such field) — derived from ApprovalsService's own
+            in-memory decision log, filtered to this item's
+            action === "request_changes" entries. Lost on process
+            restart in both the log and (for scenarios) the underlying
+            in-memory store.
+
+    ApprovalsQueueView:
+      type: object
+      required: [scenarios, discounts, scenarioPendingCount, discountPendingCount]
+      properties:
+        scenarios:
+          type: array
+          items:
+            $ref: "#/components/schemas/ApprovalItemView"
+          description: Only items with status === "pending".
+        discounts:
+          type: array
+          items:
+            $ref: "#/components/schemas/ApprovalItemView"
+          description: Only items with status === "pending".
+        scenarioPendingCount:
+          type: integer
+          description: Always equals scenarios.length.
+        discountPendingCount:
+          type: integer
+          description: Always equals discounts.length.
+
+    ApprovalsDecidedView:
+      type: object
+      required: [scenarios, discounts]
+      properties:
+        scenarios:
+          type: array
+          items:
+            $ref: "#/components/schemas/ApprovalItemView"
+          description: Only items with status in (approved, denied, returned).
+        discounts:
+          type: array
+          items:
+            $ref: "#/components/schemas/ApprovalItemView"
+          description: Only items with status in (approved, denied, returned).
+
+    DiscountRiskBanner:
+      type: object
+      required: [hardCount, advisoryCount]
+      properties:
+        hardCount:
+          type: integer
+          description: Count of output.riskPanels where isHard === true (regardless of severity).
+        advisoryCount:
+          type: integer
+          description: Count of output.riskPanels where isHard === false AND severity !== "low".
+
+    DiscountReviewView:
+      description: ApprovalItemView (discount domain) plus review-only fields.
+      allOf:
+        - $ref: "#/components/schemas/ApprovalItemView"
+        - type: object
+          required: [riskBanner, constraintWarnings, competitiveFlags]
+          properties:
+            riskBanner:
+              $ref: "#/components/schemas/DiscountRiskBanner"
+            constraintWarnings:
+              type: array
+              items:
+                type: string
+              description: Titles of output.riskPanels where severity !== "low".
+            competitiveFlags:
+              type: array
+              items:
+                type: string
+              description: Always [] in v1 — no competitive-price integration exists.
+
+    ScenarioReviewView:
+      description: ApprovalItemView (scenario domain) plus the full SLICE-07 output, reused as-is.
+      allOf:
+        - $ref: "#/components/schemas/ApprovalItemView"
+        - type: object
+          required: [output]
+          properties:
+            output:
+              $ref: "#/components/schemas/ScenarioOutput"
+
+    DecisionDto:
+      type: object
+      description: >
+        Plain TS interface — zero runtime enum validation on `action`.
+        Server-side, only "approve" and "deny" are matched explicitly;
+        any other string (including a typo) is treated as
+        "request_changes" and maps to status "returned".
+      required: [action]
+      properties:
+        action:
+          type: string
+          enum: [approve, deny, request_changes]
+        comment:
+          type: string
+          description: >
+            Required (non-empty after trim) for every action except
+            "approve"; validated server-side before the id lookup runs,
+            so 400 (missing comment) takes precedence over 404 (unknown
+            id) when both conditions are true.
