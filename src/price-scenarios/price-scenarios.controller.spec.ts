@@ -19,6 +19,12 @@ const mockScenario: ScenarioEntity = {
   output: null,
 }
 
+const mockDeepDive = {
+  priceAdjustments: [{ sku: "SKU-1000", unlockLevel: 0 }],
+  marketingTiles: [],
+  discountTiles: [],
+}
+
 const mockService = {
   findAll: jest.fn().mockReturnValue([mockScenario]),
   findOne: jest.fn().mockResolvedValue(mockScenario),
@@ -27,6 +33,7 @@ const mockService = {
   submit: jest.fn().mockResolvedValue({ ...mockScenario, status: "pending" }),
   updateStatus: jest.fn().mockResolvedValue({ ...mockScenario, status: "approved" }),
   remove: jest.fn().mockResolvedValue(undefined),
+  getDeepDive: jest.fn().mockResolvedValue(mockDeepDive),
 }
 
 describe("PriceScenariosController", () => {
@@ -85,5 +92,11 @@ describe("PriceScenariosController", () => {
   it("findAll delegates to service", () => {
     controller.findAll()
     expect(mockService.findAll).toHaveBeenCalled()
+  })
+
+  it("getDeepDive returns deep dive output", async () => {
+    const result = await controller.getDeepDive(1)
+    expect(result.priceAdjustments).toBeDefined()
+    expect(mockService.getDeepDive).toHaveBeenCalledWith(1)
   })
 })

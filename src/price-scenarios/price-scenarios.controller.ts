@@ -27,6 +27,11 @@ export class PriceScenariosController {
     return this.service.findOne(id)
   }
 
+  @Get(":id/deep-dive")
+  getDeepDive(@Param("id", ParseIntPipe) id: number) {
+    return this.service.getDeepDive(id)
+  }
+
   @Post()
   create(@Body() dto: CreateScenarioDto) {
     return this.service.create(dto)

@@ -5,11 +5,17 @@ import {
   ChangeRequest,
   ComparisonRow,
   CreateScenarioDto,
+  DeepDiveOutput,
+  DiscountTile,
+  DiscountTileProduct,
   FrontierPoint,
+  MarketingTile,
+  MarketingTileProduct,
   Recommendation,
   ScenarioEntity,
   ScenarioGuardrailCheck,
   ScenarioOutput,
+  SkuRecommendationRow,
   UpdateStatusDto,
 } from "./price-scenario-types"
 
@@ -114,7 +120,7 @@ function buildComparison(
       metric: "Inventory Risk",
       current: "Low",
       scenario: invRisk,
-      mlRec: 55 <= 40 ? "Low" : 55 <= 70 ? "Medium" : "High",
+      mlRec: "Medium",
     },
   ]
 }
@@ -163,6 +169,82 @@ function buildOutput(scenario: ScenarioEntity, guardrailsService: GuardrailsServ
     scenarioPoint,
     recommendations,
   }
+}
+
+const CATEGORIES = ["Tops", "Bottoms", "Outerwear", "Accessories", "Footwear"]
+const BRANDS = ["TCP", "Carter's", "OshKosh", "Skip Hop"]
+const CAMPAIGN_TYPES = ["Email Blast", "Display", "Social", "In-Store", "Push"]
+const DISCOUNT_TYPES = ["Clearance", "Promo", "Flash Sale", "Bundle", "Loyalty"]
+
+function buildDeepDive(scenario: ScenarioEntity): DeepDiveOutput {
+  const total = Math.min(20, scenario.skuCount)
+
+  const priceAdjustments: SkuRecommendationRow[] = Array.from({ length: total }, (_, i) => {
+    const currentPrice = 19.99 + (i % 7) * 5
+    const changePct = -2 - (i % 8) * 1.5
+    const recommendedPrice = Math.max(9.99, currentPrice * (1 + changePct / 100))
+    const unlockLevel = Math.floor((i / total) * 100)
+    const roundedUnlock = Math.floor(unlockLevel / 10) * 10
+    return {
+      sku: `SKU-${1000 + i}`,
+      productName: `${CATEGORIES[i % CATEGORIES.length]} Style ${String.fromCharCode(65 + (i % 26))}`,
+      category: CATEGORIES[i % CATEGORIES.length],
+      brand: BRANDS[i % BRANDS.length],
+      currentPrice: Math.round(currentPrice * 100) / 100,
+      recommendedPrice: Math.round(recommendedPrice * 100) / 100,
+      priceChange: Math.round((recommendedPrice - currentPrice) * 100) / 100,
+      priceChangePct: Math.round(changePct * 10) / 10,
+      currentGrossMargin: 35 + (i % 10),
+      projectedGrossMargin: 33 + (i % 10) + scenario.optimizationLevel * 0.02,
+      weeklyRevenue: Math.round(currentPrice * 40),
+      projectedRevenue: Math.round(recommendedPrice * 40 * 1.08),
+      currentWeeksOfSupply: 6 + (i % 8),
+      projectedWeeksOfSupply: 4 + (i % 6),
+      unlockLevel: roundedUnlock,
+    }
+  })
+
+  const UNLOCK_LEVELS = [0, 20, 40, 60, 80]
+
+  const marketingTiles: MarketingTile[] = UNLOCK_LEVELS.map((unlockLevel, i) => {
+    const products: MarketingTileProduct[] = Array.from({ length: 3 }, (_, j) => ({
+      sku: `SKU-${2000 + i * 3 + j}`,
+      productName: `${CATEGORIES[(i + j) % CATEGORIES.length]} Promo Item ${j + 1}`,
+      currentPrice: 24.99 + j * 5,
+      promoPrice: Math.round((24.99 + j * 5) * 0.85 * 100) / 100,
+    }))
+    return {
+      id: `mkt-${i + 1}`,
+      campaign: `${CAMPAIGN_TYPES[i % CAMPAIGN_TYPES.length]} Campaign ${i + 1}`,
+      type: CAMPAIGN_TYPES[i % CAMPAIGN_TYPES.length],
+      discount: `${15 + i * 5}% off`,
+      skuCount: 3,
+      projectedLift: `+${6 + i * 2}% revenue`,
+      unlockLevel,
+      products,
+    }
+  })
+
+  const discountTiles: DiscountTile[] = UNLOCK_LEVELS.map((unlockLevel, i) => {
+    const products: DiscountTileProduct[] = Array.from({ length: 3 }, (_, j) => ({
+      sku: `SKU-${3000 + i * 3 + j}`,
+      productName: `${CATEGORIES[(i + j + 2) % CATEGORIES.length]} Clearance ${j + 1}`,
+      currentPrice: 29.99 + j * 5,
+      discountedPrice: Math.round((29.99 + j * 5) * (0.7 + i * 0.02) * 100) / 100,
+    }))
+    return {
+      id: `disc-${i + 1}`,
+      name: `${DISCOUNT_TYPES[i % DISCOUNT_TYPES.length]} Event ${i + 1}`,
+      type: DISCOUNT_TYPES[i % DISCOUNT_TYPES.length],
+      depth: `${20 + i * 5}–${30 + i * 5}% off`,
+      skuCount: 3,
+      projectedSellThrough: `${72 + i * 4}%`,
+      unlockLevel,
+      products,
+    }
+  })
+
+  return { priceAdjustments, marketingTiles, discountTiles }
 }
 
 @Injectable()
@@ -239,5 +321,11 @@ export class PriceScenariosService {
     const idx = this.store.findIndex((x) => x.id === id)
     if (idx === -1) throw new NotFoundException(`Scenario ${id} not found`)
     this.store.splice(idx, 1)
+  }
+
+  async getDeepDive(id: number): Promise<DeepDiveOutput> {
+    const s = await this.findOne(id)
+    if (!s.output) throw new NotFoundException(`Scenario ${id} has no output — run it first`)
+    return buildDeepDive(s)
   }
 }
