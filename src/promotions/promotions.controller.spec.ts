@@ -11,7 +11,6 @@ const daysAhead = (n: number) =>
 
 describe("PromotionsController", () => {
   let controller: PromotionsController
-  let service: PromotionsService
 
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
@@ -20,7 +19,6 @@ describe("PromotionsController", () => {
     }).compile()
 
     controller = module.get(PromotionsController)
-    service = module.get(PromotionsService)
   })
 
   it("findAll returns empty array initially", () => {

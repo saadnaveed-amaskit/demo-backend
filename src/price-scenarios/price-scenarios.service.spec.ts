@@ -209,4 +209,53 @@ describe("PriceScenariosService", () => {
     const ran = await service.run(s.id)
     expect(ran.output!.uncertainty).toContain("±")
   })
+
+  it("getDeepDive returns priceAdjustments, marketingTiles, discountTiles", async () => {
+    const s = await service.create({
+      name: "DD",
+      focusGroupId: "fs1",
+      startDate: "2026-08-01",
+      endDate: "2026-09-30",
+      objectives: { revenue: 50, grossMargin: 30, sellThrough: 20 },
+      optimizationLevel: 60,
+    })
+    await service.run(s.id)
+    const dd = await service.getDeepDive(s.id)
+    expect(dd.priceAdjustments.length).toBeGreaterThan(0)
+    expect(dd.marketingTiles).toHaveLength(5)
+    expect(dd.discountTiles).toHaveLength(5)
+  })
+
+  it("getDeepDive rows have unlockLevel in range 0–100", async () => {
+    const s = await service.create({
+      name: "DD2",
+      focusGroupId: "fs1",
+      startDate: "2026-08-01",
+      endDate: "2026-09-30",
+      objectives: { revenue: 50, grossMargin: 30, sellThrough: 20 },
+      optimizationLevel: 80,
+    })
+    await service.run(s.id)
+    const dd = await service.getDeepDive(s.id)
+    dd.priceAdjustments.forEach((row) => {
+      expect(row.unlockLevel).toBeGreaterThanOrEqual(0)
+      expect(row.unlockLevel).toBeLessThanOrEqual(100)
+    })
+  })
+
+  it("getDeepDive throws 404 when scenario has no output", async () => {
+    const s = await service.create({
+      name: "NoRun",
+      focusGroupId: "fs1",
+      startDate: "2026-08-01",
+      endDate: "2026-09-30",
+      objectives: { revenue: 50, grossMargin: 30, sellThrough: 20 },
+      optimizationLevel: 50,
+    })
+    await expect(service.getDeepDive(s.id)).rejects.toBeInstanceOf(NotFoundException)
+  })
+
+  it("getDeepDive throws 404 for unknown id", async () => {
+    await expect(service.getDeepDive(9999)).rejects.toBeInstanceOf(NotFoundException)
+  })
 })
