@@ -1,0 +1,2076 @@
+openapi: 3.0.3
+info:
+  title: Retail Nucleus Backend API
+  version: 0.1.0-baseline
+  description: |
+    Canonical, one-time baseline OpenAPI contract for all backend API behavior
+    that exists on `backend` `main` as of this snapshot. This file is the
+    single source of truth for the API contract going forward (see
+    `.claude/rules/contract-first-development.md`).
+
+    Generation method: reverse-engineered directly from `main` branch source
+    (controllers, services, DTO/type files) and their Jest spec files —
+    NOT from design docs. `knowledge/contracts/**` slice contract docs were
+    consulted only as supporting/cross-reference material; where they
+    disagreed with the code or specs, the code/specs won.
+
+    x-source-snapshot:
+      repo: backend
+      branch: main
+      commit: 506d508 (Merge pull request #8 from saadnaveed-amaskit/agent/slice-08-deep-dive)
+      note: >
+        The checked-out working branch at generation time was
+        agent/slice-09-baseline-update (which itself branches from a
+        slice-09-approvals-queue line not yet merged to main). That
+        unmerged Approvals module is intentionally EXCLUDED from this
+        baseline per instructions to capture only existing MERGED backend
+        API behavior. It will be added as a contract update once merged.
+
+    x-global-behavior: |
+      - No global path prefix is set in main.ts (no app.setGlobalPrefix()).
+      - app.enableCors() is called with no options (permissive default CORS).
+      - No global ValidationPipe/class-validator is registered anywhere.
+        All request bodies are plain TypeScript interfaces with ZERO runtime
+        validation. Required/optional markings on request schemas below
+        reflect the TS type only; the server does NOT enforce them except
+        where a service explicitly checks a field (noted per-endpoint).
+        Missing/malformed bodies can produce an unhandled 500 instead of a
+        clean 400 in several endpoints — flagged inline via x-note.
+      - Numeric :id path params (guardrails, promotions, discount-models,
+        price-scenarios) are parsed via Nest's ParseIntPipe, which returns
+        400 Bad Request for non-numeric values. String :id/:focusSetId/
+        :skuId params (focus-sets, product-grid) have no pipe/coercion.
+      - All in-memory stores are process-wide singletons with no
+        persistence; numeric id counters are per-module and reset on
+        process restart.
+
+servers:
+  - url: http://localhost:3000
+    description: Local dev server (no global prefix)
+
+tags:
+  - name: health
+  - name: catalog
+  - name: focus-sets
+  - name: product-grid
+  - name: guardrails
+  - name: promotions
+  - name: discount-models
+  - name: price-scenarios
+
+paths:
+  /health:
+    get:
+      operationId: getHealth
+      tags: [health]
+      summary: Liveness check
+      responses:
+        "200":
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /catalog/attributes:
+    get:
+      operationId: getCatalogAttributes
+      tags: [catalog]
+      summary: List filterable catalog attributes and their observed values
+      description: >
+        Derived from a fixed list of 9 filterable attributes (brand,
+        division, department, category, subClass, masterSeason,
+        seasonCode, bigIdea, status), each populated with the distinct,
+        sorted values present in the in-memory catalog seed data.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AttributeOption"
+
+  /focus-sets:
+    get:
+      operationId: listFocusSets
+      tags: [focus-sets]
+      summary: List all focus sets
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/FocusSetView"
+    post:
+      operationId: createFocusSet
+      tags: [focus-sets]
+      summary: Create a focus set
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FocusSetBody"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FocusSetView"
+        "400":
+          description: >
+            name is empty/whitespace-only, filter is missing or its root
+            node is not type "group", or the condition tree exceeds 3
+            levels of depth (root group = level 1).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /focus-sets/resolve:
+    post:
+      operationId: resolveFocusSetPreview
+      tags: [focus-sets]
+      summary: Preview SKUs matched by an ad-hoc (unsaved) filter tree
+      description: >
+        Unlike create/update, this endpoint does NOT enforce the
+        "root must be type group" rule or the max-depth-3 rule.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [filter]
+              properties:
+                filter:
+                  $ref: "#/components/schemas/ConditionNode"
+      responses:
+        "200":
+          description: OK (explicit @HttpCode(200) override of default POST 201)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResolveResult"
+      x-note: >
+        No runtime validation of the request body. A missing `filter`
+        field causes an unhandled TypeError (surfaces as 500), not a
+        clean 400, because no ValidationPipe is registered.
+
+  /focus-sets/{id}:
+    get:
+      operationId: getFocusSet
+      tags: [focus-sets]
+      summary: Get a focus set by id
+      parameters:
+        - $ref: "#/components/parameters/FocusSetIdPath"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FocusSetView"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      operationId: updateFocusSet
+      tags: [focus-sets]
+      summary: Update a focus set (name and/or filter)
+      parameters:
+        - $ref: "#/components/parameters/FocusSetIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FocusSetBody"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FocusSetView"
+        "400":
+          description: Same validation rules as create (name, root-group, max depth 3).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteFocusSet
+      tags: [focus-sets]
+      summary: Delete a focus set
+      parameters:
+        - $ref: "#/components/parameters/FocusSetIdPath"
+      responses:
+        "204":
+          description: Deleted, no content
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /focus-sets/{id}/skus:
+    get:
+      operationId: getFocusSetSkus
+      tags: [focus-sets]
+      summary: Resolve the SKUs currently matched by a saved focus set's filter
+      parameters:
+        - $ref: "#/components/parameters/FocusSetIdPath"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResolveResult"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /focus-sets/{id}/duplicate:
+    post:
+      operationId: duplicateFocusSet
+      tags: [focus-sets]
+      summary: Duplicate a focus set under a new name
+      description: >
+        The new record inherits the source's filter AND its original
+        createdAt timestamp (not the duplication time), because duplicate()
+        copies existing.createdAt through rather than stamping "now".
+      parameters:
+        - $ref: "#/components/parameters/FocusSetIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+      responses:
+        "201":
+          description: Created (new id, name required non-empty via internal create() call)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FocusSetView"
+        "400":
+          description: Empty/whitespace name (validated by the internal create() call).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /product-grid/{focusSetId}:
+    get:
+      operationId: getProductGrid
+      tags: [product-grid]
+      summary: Get the product grid derived from a saved focus set's filter
+      parameters:
+        - $ref: "#/components/parameters/FocusSetIdPathParam"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProductGridView"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /product-grid/{focusSetId}/exclude:
+    post:
+      operationId: excludeSkuFromGrid
+      tags: [product-grid]
+      summary: Mark a SKU as excluded within a focus set's grid
+      description: >
+        Echoes the input skuId without verifying it actually exists in the
+        catalog or in the focus set's resolved SKU list.
+      parameters:
+        - $ref: "#/components/parameters/FocusSetIdPathParam"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [skuId]
+              properties:
+                skuId:
+                  type: string
+      responses:
+        "200":
+          description: OK (explicit @HttpCode(200) override of default POST 201)
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [excludedSkuId]
+                properties:
+                  excludedSkuId:
+                    type: string
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /product-grid/{focusSetId}/exclusions/{skuId}:
+    delete:
+      operationId: restoreExcludedSku
+      tags: [product-grid]
+      summary: Restore (un-exclude) a single SKU
+      description: >
+        x-note: Does NOT 404 for an unknown focusSetId or skuId — the
+        operation is a silent no-op via optional-chained Map delete. This
+        is inconsistent with every other delete/removal endpoint in the
+        API, which does 404 on an unknown id.
+      parameters:
+        - $ref: "#/components/parameters/FocusSetIdPathParam"
+        - name: skuId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Deleted (or no-op if unknown), no content
+
+  /product-grid/{focusSetId}/exclusions:
+    delete:
+      operationId: restoreAllExcludedSkus
+      tags: [product-grid]
+      summary: Restore (un-exclude) all SKUs for a focus set
+      description: >
+        x-note: Does NOT 404 for an unknown focusSetId — silent no-op,
+        same asymmetry as the single-sku restore endpoint above.
+      parameters:
+        - $ref: "#/components/parameters/FocusSetIdPathParam"
+      responses:
+        "204":
+          description: Deleted (or no-op if unknown), no content
+
+  /guardrails:
+    get:
+      operationId: listGuardrails
+      tags: [guardrails]
+      summary: List all guardrails
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/GuardrailEntity"
+    post:
+      operationId: createGuardrail
+      tags: [guardrails]
+      summary: Create a guardrail
+      description: >
+        Server forces active=true and isOverridable=true on creation
+        regardless of request body (CreateGuardrailDto has no such fields).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateGuardrailDto"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GuardrailEntity"
+
+  /guardrails/evaluate:
+    post:
+      operationId: evaluateGuardrails
+      tags: [guardrails]
+      summary: Evaluate metrics against active guardrails for a brand/division
+      description: >
+        Only ACTIVE guardrails matching brand+division exactly are
+        evaluated. If a metric named by a guardrail's `rule` is missing
+        from `metrics`, `actual` is NaN and `passed` is false.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EvaluateDto"
+      responses:
+        "200":
+          description: OK (explicit @HttpCode(200) override of default POST 201)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GuardrailEvaluationResult"
+      x-note: >
+        No runtime validation. A missing `metrics` field causes an
+        unhandled TypeError (surfaces as 500), not a clean 400.
+
+  /guardrails/{id}:
+    patch:
+      operationId: updateGuardrail
+      tags: [guardrails]
+      summary: Partially update a guardrail
+      parameters:
+        - $ref: "#/components/parameters/GuardrailIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateGuardrailDto"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GuardrailEntity"
+        "400":
+          $ref: "#/components/responses/BadRequestNonNumericId"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteGuardrail
+      tags: [guardrails]
+      summary: Delete a guardrail
+      parameters:
+        - $ref: "#/components/parameters/GuardrailIdPath"
+      responses:
+        "204":
+          description: Deleted, no content
+        "400":
+          $ref: "#/components/responses/BadRequestNonNumericId"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /guardrails/{id}/active:
+    patch:
+      operationId: toggleGuardrailActive
+      tags: [guardrails]
+      summary: Toggle a guardrail's active flag
+      parameters:
+        - $ref: "#/components/parameters/GuardrailIdPath"
+      responses:
+        "200":
+          description: OK (explicit @HttpCode(200))
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GuardrailEntity"
+        "400":
+          $ref: "#/components/responses/BadRequestNonNumericId"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /guardrails/{id}/overridable:
+    patch:
+      operationId: toggleGuardrailOverridable
+      tags: [guardrails]
+      summary: Toggle a guardrail's isOverridable flag
+      parameters:
+        - $ref: "#/components/parameters/GuardrailIdPath"
+      responses:
+        "200":
+          description: OK (explicit @HttpCode(200))
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GuardrailEntity"
+        "400":
+          $ref: "#/components/responses/BadRequestNonNumericId"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /promotions:
+    get:
+      operationId: listPromotions
+      tags: [promotions]
+      summary: List all promotions
+      description: >
+        `status` on each entity is derived on every read (not stored) from
+        startDate/endDate compared against today's date (YYYY-MM-DD string
+        comparison), not persisted server state.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PromotionEntity"
+    post:
+      operationId: createPromotion
+      tags: [promotions]
+      summary: Create a promotion
+      description: >
+        `focusSetId` defaults to "" if omitted; `notes` defaults to "" if
+        omitted. The linked focus set is NOT resolved/validated at create
+        time (only when GET /promotions/{id}/products is later called).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePromotionDto"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PromotionEntity"
+        "400":
+          description: endDate is not strictly after startDate (string comparison).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /promotions/{id}/products:
+    get:
+      operationId: getPromotionProducts
+      tags: [promotions]
+      summary: Get the (discounted) product rows for a promotion
+      description: >
+        Results are capped at the first 20 matching SKUs
+        (`.slice(0, 20)`) — undocumented elsewhere in the codebase.
+      parameters:
+        - $ref: "#/components/parameters/PromotionIdPath"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PromoProductsView"
+        "400":
+          $ref: "#/components/responses/BadRequestNonNumericId"
+        "404":
+          description: >
+            Promotion id unknown, OR the promotion's focusSetId does not
+            resolve to an existing focus set (e.g. a promotion created
+            with an empty/omitted focusSetId will always 404 here).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /promotions/{id}:
+    patch:
+      operationId: updatePromotion
+      tags: [promotions]
+      summary: Partially update a promotion
+      parameters:
+        - $ref: "#/components/parameters/PromotionIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdatePromotionDto"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PromotionEntity"
+        "400":
+          description: >
+            Re-validated after merge: resulting startDate/endDate must
+            satisfy endDate > startDate, even if only one date field was
+            included in this PATCH body.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deletePromotion
+      tags: [promotions]
+      summary: Delete a promotion
+      parameters:
+        - $ref: "#/components/parameters/PromotionIdPath"
+      responses:
+        "204":
+          description: Deleted, no content
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /discount-models:
+    get:
+      operationId: listDiscountModels
+      tags: [discount-models]
+      summary: List all discount models, newest id first
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DiscountModelEntity"
+    post:
+      operationId: createDiscountModel
+      tags: [discount-models]
+      summary: Create a discount model
+      description: >
+        x-note: If focusGroupId is truthy but does not resolve to an
+        existing focus set, the resulting NotFoundException is SWALLOWED
+        internally (try/catch) — focusGroupName/skuCount simply stay at
+        defaults ("" / 0) rather than the request failing. This is
+        asymmetric with price-scenarios' create, which propagates the
+        same lookup failure as a 404.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDiscountModelDto"
+      responses:
+        "201":
+          description: Created, status is always "new", output is null.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DiscountModelEntity"
+
+  /discount-models/{id}:
+    get:
+      operationId: getDiscountModel
+      tags: [discount-models]
+      summary: Get a discount model by id
+      parameters:
+        - $ref: "#/components/parameters/DiscountModelIdPath"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DiscountModelEntity"
+        "400":
+          $ref: "#/components/responses/BadRequestNonNumericId"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deleteDiscountModel
+      tags: [discount-models]
+      summary: Delete a discount model
+      parameters:
+        - $ref: "#/components/parameters/DiscountModelIdPath"
+      responses:
+        "204":
+          description: Deleted, no content
+        "400":
+          $ref: "#/components/responses/BadRequestNonNumericId"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /discount-models/{id}/run:
+    post:
+      operationId: runDiscountModel
+      tags: [discount-models]
+      summary: Run the discount model and populate its output
+      description: >
+        Forces status to "draft" regardless of prior status. Uses
+        `skuCount || 10` as the effective sku count for computation (a
+        model whose linked focus set couldn't be resolved at create time
+        defaults to 10). Deterministic array lengths: rollupRows has 5
+        entries (one per RN_DIVISIONS division), riskPanels has 6 (one per
+        RISK_TEMPLATES), forecastRevenue/forecastMargin have 2 datasets
+        each ("Baseline"/"Promoted"), forecastUnits has 8 weekly entries.
+        marketingHandle format:
+        `${brand}-${fmt}-${dep}-${channel}-SUMMER-${yyyymm}`.
+      parameters:
+        - $ref: "#/components/parameters/DiscountModelIdPath"
+      responses:
+        "200":
+          description: OK (explicit @HttpCode(200))
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DiscountModelEntity"
+        "400":
+          $ref: "#/components/responses/BadRequestNonNumericId"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /discount-models/{id}/submit:
+    post:
+      operationId: submitDiscountModel
+      tags: [discount-models]
+      summary: Submit a discount model for approval
+      description: >
+        Only accepts models currently in status "draft" (i.e. run() must
+        be called first). Unlike price-scenarios' submit, there is NO
+        "returned" resubmit path here.
+      parameters:
+        - $ref: "#/components/parameters/DiscountModelIdPath"
+      responses:
+        "200":
+          description: OK (explicit @HttpCode(200)), status becomes "pending".
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DiscountModelEntity"
+        "400":
+          description: Current status is not "draft".
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /discount-models/{id}/status:
+    patch:
+      operationId: updateDiscountModelStatus
+      tags: [discount-models]
+      summary: Force-set a discount model's status
+      description: >
+        No transition rules are enforced — any string in the request body
+        is assigned as-is (no runtime enum validation), unlike submit's
+        explicit draft-only check.
+      parameters:
+        - $ref: "#/components/parameters/DiscountModelIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DiscountModelUpdateStatusDto"
+      responses:
+        "200":
+          description: OK (explicit @HttpCode(200))
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DiscountModelEntity"
+        "400":
+          $ref: "#/components/responses/BadRequestNonNumericId"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /price-scenarios:
+    get:
+      operationId: listPriceScenarios
+      tags: [price-scenarios]
+      summary: List all price scenarios, newest id first
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ScenarioEntity"
+    post:
+      operationId: createPriceScenario
+      tags: [price-scenarios]
+      summary: Create a price scenario
+      description: >
+        x-note: Unlike discount-models' create, a focusGroupId that does
+        not resolve to an existing focus set is NOT swallowed here — the
+        NotFoundException propagates as a 404 for this endpoint.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateScenarioDto"
+      responses:
+        "201":
+          description: Created, status is always "new", output is null, changeRequests is [].
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScenarioEntity"
+        "404":
+          description: focusGroupId does not resolve to an existing focus set.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /price-scenarios/{id}:
+    get:
+      operationId: getPriceScenario
+      tags: [price-scenarios]
+      summary: Get a price scenario by id
+      parameters:
+        - $ref: "#/components/parameters/ScenarioIdPath"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScenarioEntity"
+        "400":
+          $ref: "#/components/responses/BadRequestNonNumericId"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    delete:
+      operationId: deletePriceScenario
+      tags: [price-scenarios]
+      summary: Delete a price scenario
+      parameters:
+        - $ref: "#/components/parameters/ScenarioIdPath"
+      responses:
+        "204":
+          description: Deleted, no content
+        "400":
+          $ref: "#/components/responses/BadRequestNonNumericId"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /price-scenarios/{id}/deep-dive:
+    get:
+      operationId: getPriceScenarioDeepDive
+      tags: [price-scenarios]
+      summary: Get the deep-dive breakdown for a scenario that has been run
+      description: >
+        priceAdjustments.length === min(20, skuCount); marketingTiles and
+        discountTiles each have exactly 5 entries (one per
+        UNLOCK_LEVELS = [0,20,40,60,80]).
+      parameters:
+        - $ref: "#/components/parameters/ScenarioIdPath"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DeepDiveOutput"
+        "400":
+          $ref: "#/components/responses/BadRequestNonNumericId"
+        "404":
+          description: >
+            Scenario id unknown, OR the scenario exists but has not been
+            run yet (output is null). Both cases return 404, distinguished
+            only by message text — no 409/400 is used for the
+            not-run-yet precondition failure.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /price-scenarios/{id}/run:
+    post:
+      operationId: runPriceScenario
+      tags: [price-scenarios]
+      summary: Run the price scenario and populate its output
+      description: >
+        Forces status to "draft". frontier has 11 points (levels
+        0,10,...,100), comparison has 7 rows, recommendations has exactly
+        4 entries (sliced from 6 templates). guardrailResults only
+        includes currently-active guardrails. uncertainty string always
+        contains "±". scenarioPoint.level equals the optimizationLevel
+        set at creation.
+      parameters:
+        - $ref: "#/components/parameters/ScenarioIdPath"
+      responses:
+        "200":
+          description: OK (explicit @HttpCode(200))
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScenarioEntity"
+        "400":
+          $ref: "#/components/responses/BadRequestNonNumericId"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /price-scenarios/{id}/submit:
+    post:
+      operationId: submitPriceScenario
+      tags: [price-scenarios]
+      summary: Submit a price scenario for approval
+      description: >
+        Accepts current status "draft" OR "returned" (supports a
+        revise-and-resubmit workflow not present in discount-models).
+      parameters:
+        - $ref: "#/components/parameters/ScenarioIdPath"
+      responses:
+        "200":
+          description: OK (explicit @HttpCode(200)), status becomes "pending".
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScenarioEntity"
+        "400":
+          description: Current status is neither "draft" nor "returned".
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+  /price-scenarios/{id}/status:
+    patch:
+      operationId: updatePriceScenarioStatus
+      tags: [price-scenarios]
+      summary: Force-set a price scenario's status
+      description: >
+        No transition rules enforced (any string is assigned as-is). Side
+        effect: if status is "returned" AND a non-empty comment is
+        provided, a ChangeRequest is appended to changeRequests (array
+        only ever grows). If status is "returned" with no comment, no
+        change-request record is added.
+      parameters:
+        - $ref: "#/components/parameters/ScenarioIdPath"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScenarioUpdateStatusDto"
+      responses:
+        "200":
+          description: OK (explicit @HttpCode(200))
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ScenarioEntity"
+        "400":
+          $ref: "#/components/responses/BadRequestNonNumericId"
+        "404":
+          $ref: "#/components/responses/NotFound"
+
+components:
+  parameters:
+    FocusSetIdPath:
+      name: id
+      in: path
+      required: true
+      description: Focus set id (plain string, no coercion pipe).
+      schema:
+        type: string
+    FocusSetIdPathParam:
+      name: focusSetId
+      in: path
+      required: true
+      description: Focus set id (plain string, no coercion pipe).
+      schema:
+        type: string
+    GuardrailIdPath:
+      name: id
+      in: path
+      required: true
+      description: Guardrail id, parsed via ParseIntPipe (400 if non-numeric).
+      schema:
+        type: integer
+    PromotionIdPath:
+      name: id
+      in: path
+      required: true
+      description: Promotion id, parsed via ParseIntPipe (400 if non-numeric).
+      schema:
+        type: integer
+    DiscountModelIdPath:
+      name: id
+      in: path
+      required: true
+      description: Discount model id, parsed via ParseIntPipe (400 if non-numeric).
+      schema:
+        type: integer
+    ScenarioIdPath:
+      name: id
+      in: path
+      required: true
+      description: Price scenario id, parsed via ParseIntPipe (400 if non-numeric).
+      schema:
+        type: integer
+
+  responses:
+    NotFound:
+      description: Resource not found.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    BadRequestNonNumericId:
+      description: The :id path parameter could not be parsed as an integer.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+  schemas:
+    ErrorResponse:
+      type: object
+      description: Default Nest HttpException JSON shape (no custom exception filter observed).
+      required: [statusCode, message]
+      properties:
+        statusCode:
+          type: integer
+        message:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: string
+        error:
+          type: string
+
+    HealthStatus:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          example: ok
+
+    AttributeOption:
+      type: object
+      required: [attr, label, values]
+      properties:
+        attr:
+          type: string
+        label:
+          type: string
+        values:
+          type: array
+          items:
+            type: string
+
+    ConditionRuleNode:
+      type: object
+      required: [type, attr, val]
+      properties:
+        type:
+          type: string
+          enum: [rule]
+        attr:
+          type: string
+        val:
+          type: string
+
+    ConditionGroupNode:
+      type: object
+      required: [type, logic, rules]
+      properties:
+        type:
+          type: string
+          enum: [group]
+        logic:
+          type: string
+          enum: [AND, OR]
+        rules:
+          type: array
+          items:
+            $ref: "#/components/schemas/ConditionNode"
+
+    ConditionNode:
+      description: >
+        Recursive AND/OR condition tree. Enforced max depth is 3 (root
+        group = depth 1), but ONLY on focus-sets create/update — not on
+        POST /focus-sets/resolve.
+      oneOf:
+        - $ref: "#/components/schemas/ConditionRuleNode"
+        - $ref: "#/components/schemas/ConditionGroupNode"
+      discriminator:
+        propertyName: type
+        mapping:
+          rule: "#/components/schemas/ConditionRuleNode"
+          group: "#/components/schemas/ConditionGroupNode"
+
+    SkuView:
+      type: object
+      required: [sku, name, brand, division, category, price, qty, status]
+      properties:
+        sku:
+          type: string
+        name:
+          type: string
+        brand:
+          type: string
+        division:
+          type: string
+        category:
+          type: string
+        price:
+          type: number
+        qty:
+          type: integer
+        status:
+          type: string
+
+    ResolveResult:
+      type: object
+      required: [count, skus]
+      properties:
+        count:
+          type: integer
+        skus:
+          type: array
+          items:
+            $ref: "#/components/schemas/SkuView"
+
+    FocusSetView:
+      type: object
+      required: [id, name, filter, productCount, createdAt]
+      properties:
+        id:
+          type: string
+          description: Format "focus-set-##" (zero-padded, sequential, per-process).
+        name:
+          type: string
+        filter:
+          $ref: "#/components/schemas/ConditionNode"
+        productCount:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+
+    FocusSetBody:
+      type: object
+      required: [name, filter]
+      properties:
+        name:
+          type: string
+        filter:
+          $ref: "#/components/schemas/ConditionNode"
+
+    SkuRow:
+      type: object
+      required:
+        - sku
+        - productId
+        - productName
+        - name
+        - brand
+        - division
+        - category
+        - subClass
+        - msrp
+        - price
+        - qty
+        - onOrderQty
+        - status
+        - excluded
+      properties:
+        sku:
+          type: string
+        productId:
+          type: string
+        productName:
+          type: string
+        name:
+          type: string
+        brand:
+          type: string
+        division:
+          type: string
+        category:
+          type: string
+        subClass:
+          type: string
+        msrp:
+          type: number
+          nullable: true
+        price:
+          type: number
+        qty:
+          type: integer
+        onOrderQty:
+          type: integer
+        status:
+          type: string
+          enum: [In_Stock, Low_Stock, Out_of_stock]
+        excluded:
+          type: boolean
+
+    ProductRow:
+      type: object
+      required:
+        - productId
+        - productName
+        - brand
+        - division
+        - category
+        - skuCount
+        - activeSkuCount
+        - priceRange
+        - totalQty
+        - stockStatus
+        - skus
+      properties:
+        productId:
+          type: string
+        productName:
+          type: string
+        brand:
+          type: string
+        division:
+          type: string
+        category:
+          type: string
+        skuCount:
+          type: integer
+        activeSkuCount:
+          type: integer
+        priceRange:
+          type: array
+          minItems: 2
+          maxItems: 2
+          items:
+            type: number
+          description: Tuple [min, max].
+        totalQty:
+          type: integer
+        stockStatus:
+          type: string
+          enum: [In_Stock, Low_Stock, Out_of_stock]
+          description: Worst-case across the product's SKUs (Out_of_stock > Low_Stock > In_Stock).
+        skus:
+          type: array
+          items:
+            $ref: "#/components/schemas/SkuRow"
+
+    ProductGridView:
+      type: object
+      required:
+        - focusSetId
+        - focusSetName
+        - filter
+        - products
+        - totalSkuCount
+        - activeSkuCount
+      properties:
+        focusSetId:
+          type: string
+        focusSetName:
+          type: string
+        filter:
+          $ref: "#/components/schemas/ConditionNode"
+        products:
+          type: array
+          items:
+            $ref: "#/components/schemas/ProductRow"
+        totalSkuCount:
+          type: integer
+        activeSkuCount:
+          type: integer
+
+    GuardrailEntity:
+      type: object
+      required: [id, brand, division, rule, op, value, unit, active, isOverridable]
+      properties:
+        id:
+          type: integer
+        brand:
+          type: string
+        division:
+          type: string
+        rule:
+          type: string
+        op:
+          type: string
+        value:
+          type: string
+        unit:
+          type: string
+        active:
+          type: boolean
+        isOverridable:
+          type: boolean
+
+    CreateGuardrailDto:
+      type: object
+      required: [brand, division, rule, op, value, unit]
+      properties:
+        brand:
+          type: string
+        division:
+          type: string
+        rule:
+          type: string
+        op:
+          type: string
+        value:
+          type: string
+        unit:
+          type: string
+
+    UpdateGuardrailDto:
+      type: object
+      description: All fields optional; server only assigns fields that are not undefined (partial update).
+      properties:
+        brand:
+          type: string
+        division:
+          type: string
+        rule:
+          type: string
+        op:
+          type: string
+        value:
+          type: string
+        unit:
+          type: string
+
+    EvaluateDto:
+      type: object
+      required: [brand, division, metrics]
+      properties:
+        brand:
+          type: string
+        division:
+          type: string
+        metrics:
+          type: object
+          additionalProperties:
+            type: number
+          description: Keyed by guardrail `rule` name.
+
+    GuardrailCheckResult:
+      type: object
+      required: [id, rule, op, threshold, unit, actual, passed, isOverridable, severity]
+      properties:
+        id:
+          type: integer
+        rule:
+          type: string
+        op:
+          type: string
+        threshold:
+          type: string
+        unit:
+          type: string
+        actual:
+          type: number
+          description: NaN if the corresponding metric was missing from the request.
+        passed:
+          type: boolean
+        isOverridable:
+          type: boolean
+        severity:
+          type: string
+          enum: [hard, advisory]
+          description: advisory if isOverridable, else hard.
+
+    GuardrailEvaluationResult:
+      type: object
+      required: [compliant, results]
+      properties:
+        compliant:
+          type: boolean
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/GuardrailCheckResult"
+
+    PromotionEntity:
+      type: object
+      required:
+        - id
+        - name
+        - startDate
+        - endDate
+        - discountType
+        - discountValue
+        - focusSetId
+        - channel
+        - color
+        - notes
+        - status
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        startDate:
+          type: string
+          format: date
+        endDate:
+          type: string
+          format: date
+        discountType:
+          type: string
+          enum: [percentage, flat]
+        discountValue:
+          type: number
+        focusSetId:
+          type: string
+        channel:
+          type: string
+        color:
+          type: string
+        notes:
+          type: string
+        status:
+          type: string
+          enum: [active, scheduled, expired]
+          description: Derived on every read from startDate/endDate vs today; not persisted.
+
+    CreatePromotionDto:
+      type: object
+      required: [name, startDate, endDate, discountType, discountValue, focusSetId, channel, color]
+      properties:
+        name:
+          type: string
+        startDate:
+          type: string
+          format: date
+        endDate:
+          type: string
+          format: date
+        discountType:
+          type: string
+          enum: [percentage, flat]
+        discountValue:
+          type: number
+        focusSetId:
+          type: string
+        channel:
+          type: string
+        color:
+          type: string
+        notes:
+          type: string
+          description: Optional; defaults to "" if omitted.
+
+    UpdatePromotionDto:
+      type: object
+      description: All fields optional; partial update.
+      properties:
+        name:
+          type: string
+        startDate:
+          type: string
+          format: date
+        endDate:
+          type: string
+          format: date
+        discountType:
+          type: string
+          enum: [percentage, flat]
+        discountValue:
+          type: number
+        focusSetId:
+          type: string
+        channel:
+          type: string
+        color:
+          type: string
+        notes:
+          type: string
+
+    PromoProductRow:
+      type: object
+      required: [sku, name, brand, price, promoPrice, savings]
+      properties:
+        sku:
+          type: string
+        name:
+          type: string
+        brand:
+          type: string
+        price:
+          type: number
+        promoPrice:
+          type: number
+          description: Rounded to cents, floored at 0.
+        savings:
+          type: number
+          description: round((price - promoPrice) * 100) / 100.
+
+    PromoProductsView:
+      type: object
+      required: [promotionId, promotionName, discountType, discountValue, focusSetId, focusSetName, skus]
+      properties:
+        promotionId:
+          type: integer
+        promotionName:
+          type: string
+        discountType:
+          type: string
+          enum: [percentage, flat]
+        discountValue:
+          type: number
+        focusSetId:
+          type: string
+        focusSetName:
+          type: string
+        skus:
+          type: array
+          maxItems: 20
+          items:
+            $ref: "#/components/schemas/PromoProductRow"
+
+    DiscountModelEntity:
+      type: object
+      required:
+        - id
+        - name
+        - focusGroupId
+        - focusGroupName
+        - skuCount
+        - startDate
+        - endDate
+        - discountFormat
+        - discountDepth
+        - channel
+        - status
+        - createdAt
+        - marketingHandle
+        - output
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        focusGroupId:
+          type: string
+        focusGroupName:
+          type: string
+        skuCount:
+          type: integer
+        startDate:
+          type: string
+          format: date
+        endDate:
+          type: string
+          format: date
+        discountFormat:
+          type: string
+          enum: [percentage, flat, bogo, fixed]
+        discountDepth:
+          type: number
+          nullable: true
+        channel:
+          type: string
+        status:
+          type: string
+          enum: [new, draft, pending, approved, returned, denied]
+        createdAt:
+          type: string
+          format: date-time
+        marketingHandle:
+          type: string
+        output:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/DiscountModelOutput"
+
+    CreateDiscountModelDto:
+      type: object
+      required: [name, focusGroupId, startDate, endDate, discountFormat, channel]
+      properties:
+        name:
+          type: string
+        focusGroupId:
+          type: string
+        startDate:
+          type: string
+          format: date
+        endDate:
+          type: string
+          format: date
+        discountFormat:
+          type: string
+          enum: [percentage, flat, bogo, fixed]
+        discountDepth:
+          type: number
+          description: Optional. "bogo" format internally forces a fixed 0.5 rate regardless of this value.
+        channel:
+          type: string
+
+    DiscountModelUpdateStatusDto:
+      type: object
+      required: [status]
+      description: status is not runtime-validated against the enum; any string is accepted.
+      properties:
+        status:
+          type: string
+          enum: [new, draft, pending, approved, returned, denied]
+
+    DiscountModelKpis:
+      type: object
+      required: [revenueImpact, marginImpact, unitLift, sellThrough, incrementalRevenue]
+      properties:
+        revenueImpact:
+          type: number
+        marginImpact:
+          type: number
+        unitLift:
+          type: number
+        sellThrough:
+          type: number
+        incrementalRevenue:
+          type: number
+
+    NivoLineDatapoint:
+      type: object
+      required: [x, y]
+      properties:
+        x:
+          type: string
+        y:
+          type: number
+
+    NivoLineDataset:
+      type: object
+      required: [id, data]
+      properties:
+        id:
+          type: string
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/NivoLineDatapoint"
+
+    NivoBarDatapoint:
+      type: object
+      required: [week, Baseline, Promoted]
+      properties:
+        week:
+          type: string
+        Baseline:
+          type: number
+        Promoted:
+          type: number
+
+    RollupRow:
+      type: object
+      required: [label, skuCount, revenue, margin, sellThrough, stockOutRisk, confidence]
+      properties:
+        label:
+          type: string
+        skuCount:
+          type: integer
+        revenue:
+          type: number
+        margin:
+          type: number
+        sellThrough:
+          type: number
+        stockOutRisk:
+          type: boolean
+        confidence:
+          type: number
+
+    RiskPanel:
+      type: object
+      required: [title, severity, description, isHard]
+      properties:
+        title:
+          type: string
+        severity:
+          type: string
+          enum: [high, medium, low]
+        description:
+          type: string
+        isHard:
+          type: boolean
+
+    DiscountModelOutput:
+      type: object
+      required: [narrative, marketingHandle, kpis, forecastRevenue, forecastMargin, forecastUnits, rollupRows, riskPanels]
+      properties:
+        narrative:
+          type: string
+        marketingHandle:
+          type: string
+        kpis:
+          $ref: "#/components/schemas/DiscountModelKpis"
+        forecastRevenue:
+          type: array
+          items:
+            $ref: "#/components/schemas/NivoLineDataset"
+          description: Always 2 datasets ("Baseline", "Promoted").
+        forecastMargin:
+          type: array
+          items:
+            $ref: "#/components/schemas/NivoLineDataset"
+          description: Always 2 datasets ("Baseline", "Promoted").
+        forecastUnits:
+          type: array
+          items:
+            $ref: "#/components/schemas/NivoBarDatapoint"
+          description: Always 8 entries (Wk 1..Wk 8).
+        rollupRows:
+          type: array
+          items:
+            $ref: "#/components/schemas/RollupRow"
+          description: Always 5 entries (one per RN_DIVISIONS).
+        riskPanels:
+          type: array
+          items:
+            $ref: "#/components/schemas/RiskPanel"
+          description: Always 6 entries (one per RISK_TEMPLATES).
+
+    ScenarioObjectives:
+      type: object
+      required: [revenue, grossMargin, sellThrough]
+      properties:
+        revenue:
+          type: number
+        grossMargin:
+          type: number
+        sellThrough:
+          type: number
+
+    ChangeRequest:
+      type: object
+      required: [requestedAt, comment]
+      properties:
+        requestedAt:
+          type: string
+          format: date-time
+        comment:
+          type: string
+
+    ScenarioGuardrailCheck:
+      type: object
+      required: [id, rule, op, threshold, unit, actual, passed, isOverridable, severity]
+      properties:
+        id:
+          type: integer
+        rule:
+          type: string
+        op:
+          type: string
+        threshold:
+          type: string
+        unit:
+          type: string
+        actual:
+          type: number
+        passed:
+          type: boolean
+        isOverridable:
+          type: boolean
+        severity:
+          type: string
+          enum: [hard, advisory]
+
+    ComparisonRow:
+      type: object
+      required: [metric, current, scenario, mlRec]
+      properties:
+        metric:
+          type: string
+        current:
+          type: string
+        scenario:
+          type: string
+        mlRec:
+          type: string
+
+    FrontierPoint:
+      type: object
+      required: [level, revenue, profit]
+      properties:
+        level:
+          type: number
+        revenue:
+          type: number
+        profit:
+          type: number
+
+    Recommendation:
+      type: object
+      required: [tag, text]
+      properties:
+        tag:
+          type: string
+          enum: [Pricing, Marketing, Merch, Inventory]
+        text:
+          type: string
+
+    ScenarioOutput:
+      type: object
+      required:
+        - narrative
+        - uncertainty
+        - guardrailResults
+        - comparison
+        - frontier
+        - currentPoint
+        - mlRecPoint
+        - scenarioPoint
+        - recommendations
+      properties:
+        narrative:
+          type: string
+        uncertainty:
+          type: string
+          description: Always contains a "±" character.
+        guardrailResults:
+          type: array
+          items:
+            $ref: "#/components/schemas/ScenarioGuardrailCheck"
+          description: Only currently-active guardrails.
+        comparison:
+          type: array
+          items:
+            $ref: "#/components/schemas/ComparisonRow"
+          description: Always 7 rows.
+        frontier:
+          type: array
+          items:
+            $ref: "#/components/schemas/FrontierPoint"
+          description: Always 11 points (levels 0,10,...,100).
+        currentPoint:
+          $ref: "#/components/schemas/FrontierPoint"
+        mlRecPoint:
+          $ref: "#/components/schemas/FrontierPoint"
+        scenarioPoint:
+          $ref: "#/components/schemas/FrontierPoint"
+          description: level equals the optimizationLevel set at scenario creation.
+        recommendations:
+          type: array
+          items:
+            $ref: "#/components/schemas/Recommendation"
+          description: Always exactly 4 entries (sliced from 6 templates).
+
+    ScenarioEntity:
+      type: object
+      required:
+        - id
+        - name
+        - focusGroupId
+        - focusGroupName
+        - skuCount
+        - startDate
+        - endDate
+        - objectives
+        - optimizationLevel
+        - status
+        - createdAt
+        - changeRequests
+        - output
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        focusGroupId:
+          type: string
+        focusGroupName:
+          type: string
+        skuCount:
+          type: integer
+        startDate:
+          type: string
+          format: date
+        endDate:
+          type: string
+          format: date
+        objectives:
+          $ref: "#/components/schemas/ScenarioObjectives"
+        optimizationLevel:
+          type: number
+        status:
+          type: string
+          enum: [new, draft, pending, approved, denied, returned]
+        createdAt:
+          type: string
+          format: date-time
+        changeRequests:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChangeRequest"
+        output:
+          nullable: true
+          allOf:
+            - $ref: "#/components/schemas/ScenarioOutput"
+
+    CreateScenarioDto:
+      type: object
+      required: [name, focusGroupId, startDate, endDate, objectives, optimizationLevel]
+      properties:
+        name:
+          type: string
+        focusGroupId:
+          type: string
+        startDate:
+          type: string
+          format: date
+        endDate:
+          type: string
+          format: date
+        objectives:
+          $ref: "#/components/schemas/ScenarioObjectives"
+        optimizationLevel:
+          type: number
+
+    ScenarioUpdateStatusDto:
+      type: object
+      required: [status]
+      description: status is not runtime-validated against the enum; any string is accepted.
+      properties:
+        status:
+          type: string
+          enum: [new, draft, pending, approved, denied, returned]
+        comment:
+          type: string
+          description: >
+            Optional. Only has an effect if status is "returned": a
+            non-empty comment appends a ChangeRequest entry.
+
+    SkuRecommendationRow:
+      type: object
+      required:
+        - sku
+        - productName
+        - category
+        - brand
+        - currentPrice
+        - recommendedPrice
+        - priceChange
+        - priceChangePct
+        - currentGrossMargin
+        - projectedGrossMargin
+        - weeklyRevenue
+        - projectedRevenue
+        - currentWeeksOfSupply
+        - projectedWeeksOfSupply
+        - unlockLevel
+      properties:
+        sku:
+          type: string
+        productName:
+          type: string
+        category:
+          type: string
+        brand:
+          type: string
+        currentPrice:
+          type: number
+        recommendedPrice:
+          type: number
+        priceChange:
+          type: number
+        priceChangePct:
+          type: number
+        currentGrossMargin:
+          type: number
+        projectedGrossMargin:
+          type: number
+        weeklyRevenue:
+          type: number
+        projectedRevenue:
+          type: number
+        currentWeeksOfSupply:
+          type: number
+        projectedWeeksOfSupply:
+          type: number
+        unlockLevel:
+          type: number
+          description: Minimum optimization level (0-100) required to surface this row.
+
+    MarketingTileProduct:
+      type: object
+      required: [sku, productName, currentPrice, promoPrice]
+      properties:
+        sku:
+          type: string
+        productName:
+          type: string
+        currentPrice:
+          type: number
+        promoPrice:
+          type: number
+
+    MarketingTile:
+      type: object
+      required: [id, campaign, type, discount, skuCount, projectedLift, unlockLevel, products]
+      properties:
+        id:
+          type: string
+        campaign:
+          type: string
+        type:
+          type: string
+        discount:
+          type: string
+        skuCount:
+          type: integer
+        projectedLift:
+          type: string
+        unlockLevel:
+          type: number
+        products:
+          type: array
+          items:
+            $ref: "#/components/schemas/MarketingTileProduct"
+
+    DiscountTileProduct:
+      type: object
+      required: [sku, productName, currentPrice, discountedPrice]
+      properties:
+        sku:
+          type: string
+        productName:
+          type: string
+        currentPrice:
+          type: number
+        discountedPrice:
+          type: number
+
+    DiscountTile:
+      type: object
+      required: [id, name, type, depth, skuCount, projectedSellThrough, unlockLevel, products]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        type:
+          type: string
+        depth:
+          type: string
+        skuCount:
+          type: integer
+        projectedSellThrough:
+          type: string
+        unlockLevel:
+          type: number
+        products:
+          type: array
+          items:
+            $ref: "#/components/schemas/DiscountTileProduct"
+
+    DeepDiveOutput:
+      type: object
+      required: [priceAdjustments, marketingTiles, discountTiles]
+      properties:
+        priceAdjustments:
+          type: array
+          items:
+            $ref: "#/components/schemas/SkuRecommendationRow"
+          description: Length is min(20, skuCount).
+        marketingTiles:
+          type: array
+          items:
+            $ref: "#/components/schemas/MarketingTile"
+          description: Always 5 entries (UNLOCK_LEVELS = [0,20,40,60,80]).
+        discountTiles:
+          type: array
+          items:
+            $ref: "#/components/schemas/DiscountTile"
+          description: Always 5 entries (UNLOCK_LEVELS = [0,20,40,60,80]).
