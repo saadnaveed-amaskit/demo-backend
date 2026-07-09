@@ -16,9 +16,11 @@ import { PriceScenariosController } from "./price-scenarios/price-scenarios.cont
 import { PriceScenariosService } from "./price-scenarios/price-scenarios.service"
 import { ApprovalsController } from "./approvals/approvals.controller"
 import { ApprovalsService } from "./approvals/approvals.service"
+import { AgentsController } from "./agents/agents.controller"
+import { AgentsService } from "./agents/agents.service"
 
 @Module({
-  controllers: [HealthController, FocusSetsController, CatalogController, ProductGridController, GuardrailsController, PromotionsController, DiscountModelingController, PriceScenariosController, ApprovalsController],
-  providers: [FocusSetsService, CatalogService, ProductGridService, GuardrailsService, PromotionsService, DiscountModelingService, PriceScenariosService, ApprovalsService],
+  controllers: [HealthController, FocusSetsController, CatalogController, ProductGridController, GuardrailsController, PromotionsController, DiscountModelingController, PriceScenariosController, ApprovalsController, AgentsController],
+  providers: [FocusSetsService, CatalogService, ProductGridService, GuardrailsService, PromotionsService, DiscountModelingService, PriceScenariosService, ApprovalsService, AgentsService],
 })
 export class AppModule {}

@@ -4,22 +4,28 @@
 
 | Field | Value |
 |---|---|
-| Source YAML | `backend/contracts/api-contract.yaml` |
+| Source YAML | **Not present.** `backend/contracts/api-contract.yaml` was deleted from `main` in commit `bb1a951` ("deleted redundant file") after SLICE-09. This Markdown file is now hand-maintained directly and is the sole canonical contract. |
 | Generated Markdown | `backend/contracts/api-contract.md` |
-| Backend branch | `agent/slice-09-approvals-queue` |
-| Backend commit SHA | `f1929644a50336625a1fef46a88a49508f095c6a` |
+| Backend branch | `agent/slice-10-agent-roster` |
+| Backend commit SHA | _pending commit on this branch — see SLICE-10 validation report for the final PR commit_ |
 
 ## Contract Rules
 
 - This Markdown file describes the backend API contract.
-- The structured source is `backend/contracts/api-contract.yaml`.
-- API behavior must not drift between backend code, tests, YAML contract, and this Markdown contract.
+- It is the sole canonical contract source (no YAML source currently exists — see Source table above).
+- API behavior must not drift between backend code, tests, and this Markdown contract.
 - Update this document whenever backend API behavior changes.
 
 ## Endpoint Index
 
 | Method | Path | Summary | Tags |
 |---|---|---|---|
+| GET | `/agents/catalog` | List provisionable monitor/operator types | agents |
+| POST | `/agents/hire` | Hire a new monitor or operator from the catalog | agents |
+| POST | `/agents/monitors/{id}/pause` | Pause a monitor | agents |
+| POST | `/agents/monitors/{id}/resume` | Resume a monitor | agents |
+| GET | `/agents/roster` | Get the full agent roster (KPIs, monitors, operators, task agents) | agents |
+| POST | `/agents/task-agents/{id}/retire` | Retire a task agent | agents |
 | GET | `/approvals/decided` | List price scenarios and discount models that have been decided | approvals |
 | POST | `/approvals/discounts/{id}/decision` | Approve, deny, or request changes on a pending discount model | approvals |
 | GET | `/approvals/discounts/{id}/review` | Get the discount model's risk banner and impact for approval-mode review | approvals |
@@ -69,6 +75,538 @@
 | GET | `/promotions/{id}/products` | Get the (discounted) product rows for a promotion | promotions |
 
 ## Endpoints
+
+### `GET /agents/catalog`
+
+Summary: List provisionable monitor/operator types
+
+Description: Returns the fixed catalog used by `POST /agents/hire` to validate `subtype`. Not persisted or configurable at runtime — the two arrays are hardcoded constants (`MONITOR_TYPES`, `OPERATOR_TYPES`) in `agents.service.ts`.
+
+Tags: agents
+
+Backend operationId: `getAgentCatalog`
+
+#### Request
+
+##### Path Parameters
+
+[NOT SPECIFIED]
+
+##### Query Parameters
+
+[NOT SPECIFIED]
+
+##### Headers
+
+[NOT SPECIFIED]
+
+##### Request Body
+
+Content type: [NOT SPECIFIED]
+
+Schema:
+
+[NOT SPECIFIED] (no request body for this endpoint)
+
+Notes: [NOT SPECIFIED]
+
+#### Responses
+
+##### `200`
+
+Description: OK
+
+Content type: application/json
+
+Schema:
+
+`AgentCatalogView`
+
+Example (generated from schema):
+
+```json
+{
+  "monitorTypes": ["string"],
+  "operatorTypes": ["string"]
+}
+```
+
+##### Error Responses
+
+[NOT SPECIFIED] (no documented error responses for this endpoint)
+
+#### Validation / Constraints
+
+[NOT SPECIFIED]
+
+#### Related Schemas
+
+`AgentCatalogView`
+
+### `POST /agents/hire`
+
+Summary: Hire a new monitor or operator from the catalog
+
+Description: Creates a new `MonitorEntity` (status `"active"`, `signalsToday: 0`) or `OperatorView` (always `trustLevel: "Low"`, `evidenceStatus: "unproven"`, regardless of `subtype` chosen — there is no real trust-ladder data source yet). x-note: only `subtype` is validated against the catalog for the given `kind`; `kind` itself has NO runtime enum check — any value other than exactly `"monitor"` is treated as `"operator"` (the service branches on `dto.kind === "monitor"` with an implicit `else` for everything else, including typos).
+
+Tags: agents
+
+Backend operationId: `hireAgent`
+
+#### Request
+
+##### Path Parameters
+
+[NOT SPECIFIED]
+
+##### Query Parameters
+
+[NOT SPECIFIED]
+
+##### Headers
+
+[NOT SPECIFIED]
+
+##### Request Body
+
+Content type: application/json
+
+Schema:
+
+`HireDto`
+
+Example (generated from schema):
+
+```json
+{
+  "kind": "monitor",
+  "subtype": "string"
+}
+```
+
+Notes: Request body is required.
+
+#### Responses
+
+##### `201`
+
+Description: Created (default Nest POST status — no `@HttpCode` override on this handler)
+
+Content type: application/json
+
+Schema:
+
+`MonitorEntity` \| `OperatorView` (shape depends on `kind`)
+
+Example (generated from schema, `kind: "monitor"` case):
+
+```json
+{
+  "id": 0,
+  "name": "string",
+  "type": "string",
+  "status": "active",
+  "signalsToday": 0,
+  "lastActivity": "2026-08-01T00:00:00.000Z",
+  "createdAt": "2026-08-01T00:00:00.000Z"
+}
+```
+
+##### Error Responses
+
+**`400`**
+
+Description: `subtype` is not in `MONITOR_TYPES` (if `kind === "monitor"`) or not in `OPERATOR_TYPES` (otherwise).
+
+Schema: `ErrorResponse`
+
+Example (generated from schema):
+
+```json
+{
+  "statusCode": 0,
+  "message": "string",
+  "error": "string"
+}
+```
+
+#### Validation / Constraints
+
+- Required request body fields: `kind`, `subtype`
+- `subtype` must be a member of the catalog list for the effective kind (see x-note above for how `kind` is actually branched on)
+
+#### Related Schemas
+
+`HireDto`, `MonitorEntity`, `OperatorView`, `ErrorResponse`
+
+### `POST /agents/monitors/{id}/pause`
+
+Summary: Pause a monitor
+
+Description: Sets `status: "paused"` and refreshes `lastActivity` to now. Idempotent — pausing an already-paused monitor succeeds and just re-stamps `lastActivity`, no error.
+
+Tags: agents
+
+Backend operationId: `pauseMonitor`
+
+#### Request
+
+##### Path Parameters
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| id | integer | Yes | Monitor id, parsed via ParseIntPipe (400 if non-numeric). |
+
+##### Query Parameters
+
+[NOT SPECIFIED]
+
+##### Headers
+
+[NOT SPECIFIED]
+
+##### Request Body
+
+Content type: [NOT SPECIFIED]
+
+Schema:
+
+[NOT SPECIFIED] (no request body for this endpoint)
+
+Notes: [NOT SPECIFIED]
+
+#### Responses
+
+##### `200`
+
+Description: OK (explicit `@HttpCode(200)`)
+
+Content type: application/json
+
+Schema:
+
+`MonitorEntity`
+
+Example (generated from schema):
+
+```json
+{
+  "id": 0,
+  "name": "string",
+  "type": "string",
+  "status": "active",
+  "signalsToday": 0,
+  "lastActivity": "2026-08-01T00:00:00.000Z",
+  "createdAt": "2026-08-01T00:00:00.000Z"
+}
+```
+
+##### Error Responses
+
+**`404`**
+
+Description: Monitor id not found.
+
+Schema: `ErrorResponse`
+
+Example (generated from schema):
+
+```json
+{
+  "statusCode": 0,
+  "message": "string",
+  "error": "string"
+}
+```
+
+#### Validation / Constraints
+
+[NOT SPECIFIED]
+
+#### Related Schemas
+
+`MonitorEntity`, `ErrorResponse`
+
+### `POST /agents/monitors/{id}/resume`
+
+Summary: Resume a monitor
+
+Description: Sets `status: "active"` and refreshes `lastActivity` to now. Idempotent — resuming an already-active monitor succeeds and just re-stamps `lastActivity`, no error.
+
+Tags: agents
+
+Backend operationId: `resumeMonitor`
+
+#### Request
+
+##### Path Parameters
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| id | integer | Yes | Monitor id, parsed via ParseIntPipe (400 if non-numeric). |
+
+##### Query Parameters
+
+[NOT SPECIFIED]
+
+##### Headers
+
+[NOT SPECIFIED]
+
+##### Request Body
+
+Content type: [NOT SPECIFIED]
+
+Schema:
+
+[NOT SPECIFIED] (no request body for this endpoint)
+
+Notes: [NOT SPECIFIED]
+
+#### Responses
+
+##### `200`
+
+Description: OK (explicit `@HttpCode(200)`)
+
+Content type: application/json
+
+Schema:
+
+`MonitorEntity`
+
+Example (generated from schema):
+
+```json
+{
+  "id": 0,
+  "name": "string",
+  "type": "string",
+  "status": "active",
+  "signalsToday": 0,
+  "lastActivity": "2026-08-01T00:00:00.000Z",
+  "createdAt": "2026-08-01T00:00:00.000Z"
+}
+```
+
+##### Error Responses
+
+**`404`**
+
+Description: Monitor id not found.
+
+Schema: `ErrorResponse`
+
+Example (generated from schema):
+
+```json
+{
+  "statusCode": 0,
+  "message": "string",
+  "error": "string"
+}
+```
+
+#### Validation / Constraints
+
+[NOT SPECIFIED]
+
+#### Related Schemas
+
+`MonitorEntity`, `ErrorResponse`
+
+### `GET /agents/roster`
+
+Summary: Get the full agent roster (KPIs, monitors, operators, task agents)
+
+Description: Aggregates all three collections plus derived KPIs on every read from in-memory arrays seeded at process start (3 monitors, 2 operators, 2 task agents). `kpis.actingAutonomously` counts ALL operators unconditionally — it is not a computed autonomy flag, since no Autonomy (SLICE-11) system exists yet to determine which operators are actually acting autonomously.
+
+Tags: agents
+
+Backend operationId: `getAgentRoster`
+
+#### Request
+
+##### Path Parameters
+
+[NOT SPECIFIED]
+
+##### Query Parameters
+
+[NOT SPECIFIED]
+
+##### Headers
+
+[NOT SPECIFIED]
+
+##### Request Body
+
+Content type: [NOT SPECIFIED]
+
+Schema:
+
+[NOT SPECIFIED] (no request body for this endpoint)
+
+Notes: [NOT SPECIFIED]
+
+#### Responses
+
+##### `200`
+
+Description: OK
+
+Content type: application/json
+
+Schema:
+
+`AgentRosterView`
+
+Example (generated from schema):
+
+```json
+{
+  "kpis": {
+    "agentsOnTeam": 0,
+    "signalsToday": 0,
+    "actingAutonomously": 0,
+    "evidenceBackedCount": 0,
+    "evidenceBackedTotal": 0,
+    "taskAgentsRunning": 0
+  },
+  "monitors": [
+    {
+      "id": 0,
+      "name": "string",
+      "type": "string",
+      "status": "active",
+      "signalsToday": 0,
+      "lastActivity": "2026-08-01T00:00:00.000Z",
+      "createdAt": "2026-08-01T00:00:00.000Z"
+    }
+  ],
+  "operators": [
+    {
+      "id": 0,
+      "name": "string",
+      "type": "string",
+      "trustLevel": "Low",
+      "evidenceStatus": "evidence-backed",
+      "trackRecord": "string"
+    }
+  ],
+  "taskAgents": [
+    {
+      "id": 0,
+      "name": "string",
+      "spawnedBy": "string",
+      "retirementCondition": "string",
+      "status": "running",
+      "openLink": "string",
+      "createdAt": "2026-08-01T00:00:00.000Z"
+    }
+  ]
+}
+```
+
+##### Error Responses
+
+[NOT SPECIFIED] (no documented error responses for this endpoint)
+
+#### Validation / Constraints
+
+[NOT SPECIFIED]
+
+#### Related Schemas
+
+`AgentRosterView`, `AgentKpis`, `MonitorEntity`, `OperatorView`, `TaskAgentEntity`
+
+### `POST /agents/task-agents/{id}/retire`
+
+Summary: Retire a task agent
+
+Description: Sets `status: "retired"`. Idempotent — retiring an already-retired task agent succeeds and leaves it unchanged, no error.
+
+Tags: agents
+
+Backend operationId: `retireTaskAgent`
+
+#### Request
+
+##### Path Parameters
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| id | integer | Yes | Task agent id, parsed via ParseIntPipe (400 if non-numeric). |
+
+##### Query Parameters
+
+[NOT SPECIFIED]
+
+##### Headers
+
+[NOT SPECIFIED]
+
+##### Request Body
+
+Content type: [NOT SPECIFIED]
+
+Schema:
+
+[NOT SPECIFIED] (no request body for this endpoint)
+
+Notes: [NOT SPECIFIED]
+
+#### Responses
+
+##### `200`
+
+Description: OK (explicit `@HttpCode(200)`)
+
+Content type: application/json
+
+Schema:
+
+`TaskAgentEntity`
+
+Example (generated from schema):
+
+```json
+{
+  "id": 0,
+  "name": "string",
+  "spawnedBy": "string",
+  "retirementCondition": "string",
+  "status": "running",
+  "openLink": "string",
+  "createdAt": "2026-08-01T00:00:00.000Z"
+}
+```
+
+##### Error Responses
+
+**`404`**
+
+Description: Task agent id not found.
+
+Schema: `ErrorResponse`
+
+Example (generated from schema):
+
+```json
+{
+  "statusCode": 0,
+  "message": "string",
+  "error": "string"
+}
+```
+
+#### Validation / Constraints
+
+[NOT SPECIFIED]
+
+#### Related Schemas
+
+`TaskAgentEntity`, `ErrorResponse`
 
 ### `GET /approvals/decided`
 
@@ -5154,6 +5692,78 @@ Example (generated from schema):
 
 ## Schemas
 
+### `AgentCatalogView`
+
+Description: Fixed, hardcoded provisionable catalog (`MONITOR_TYPES`, `OPERATOR_TYPES` constants in `agents.service.ts`) — not configurable at runtime.
+
+| Field | Type | Required | Nullable | Description |
+|---|---|---|---|---|
+| monitorTypes | array of string | Yes | No | Fixed list: "Price Drift Monitor", "Inventory Risk Monitor", "Competitor Price Monitor", "Guardrail Violation Monitor" |
+| operatorTypes | array of string | Yes | No | Fixed list: "Discount Approval Operator", "Scenario Optimization Operator" |
+
+Constraints: Required: `monitorTypes`, `operatorTypes`
+
+Example (generated from schema):
+
+```json
+{
+  "monitorTypes": ["string"],
+  "operatorTypes": ["string"]
+}
+```
+
+### `AgentKpis`
+
+Description: Derived on every read from the current monitors/operators/taskAgents arrays — not stored.
+
+| Field | Type | Required | Nullable | Description |
+|---|---|---|---|---|
+| agentsOnTeam | integer | Yes | No | `monitors.length + operators.length` |
+| signalsToday | integer | Yes | No | Sum of `monitor.signalsToday` across all monitors |
+| actingAutonomously | integer | Yes | No | Count of all operators (v1 placeholder — not a real autonomy computation) |
+| evidenceBackedCount | integer | Yes | No | Count of operators with `evidenceStatus === "evidence-backed"` |
+| evidenceBackedTotal | integer | Yes | No | `operators.length` |
+| taskAgentsRunning | integer | Yes | No | Count of task agents with `status === "running"` |
+
+Constraints: Required: `agentsOnTeam`, `signalsToday`, `actingAutonomously`, `evidenceBackedCount`, `evidenceBackedTotal`, `taskAgentsRunning`
+
+Example (generated from schema):
+
+```json
+{
+  "agentsOnTeam": 0,
+  "signalsToday": 0,
+  "actingAutonomously": 0,
+  "evidenceBackedCount": 0,
+  "evidenceBackedTotal": 0,
+  "taskAgentsRunning": 0
+}
+```
+
+### `AgentRosterView`
+
+Description: [NOT SPECIFIED]
+
+| Field | Type | Required | Nullable | Description |
+|---|---|---|---|---|
+| kpis | `AgentKpis` | Yes | No | [NOT SPECIFIED] |
+| monitors | array of `MonitorEntity` | Yes | No | All monitors, seeded + hired |
+| operators | array of `OperatorView` | Yes | No | All operators, seeded + hired |
+| taskAgents | array of `TaskAgentEntity` | Yes | No | All task agents (v1: seeded only, no live spawning) |
+
+Constraints: Required: `kpis`, `monitors`, `operators`, `taskAgents`
+
+Example (generated from schema):
+
+```json
+{
+  "kpis": { "agentsOnTeam": 0, "signalsToday": 0, "actingAutonomously": 0, "evidenceBackedCount": 0, "evidenceBackedTotal": 0, "taskAgentsRunning": 0 },
+  "monitors": [{ "id": 0, "name": "string", "type": "string", "status": "active", "signalsToday": 0, "lastActivity": "2026-08-01T00:00:00.000Z", "createdAt": "2026-08-01T00:00:00.000Z" }],
+  "operators": [{ "id": 0, "name": "string", "type": "string", "trustLevel": "Low", "evidenceStatus": "evidence-backed", "trackRecord": "string" }],
+  "taskAgents": [{ "id": 0, "name": "string", "spawnedBy": "string", "retirementCondition": "string", "status": "running", "openLink": "string", "createdAt": "2026-08-01T00:00:00.000Z" }]
+}
+```
+
 ### `ApprovalItemView`
 
 Description: Tier-2, computed on read from a ScenarioEntity or DiscountModelEntity — not a persisted Tier-1 entity.
@@ -6253,6 +6863,26 @@ Example (generated from schema):
 }
 ```
 
+### `HireDto`
+
+Description: Plain TS interface — zero runtime enum validation on `kind`. Only `subtype` is checked against the catalog for the effective kind; any `kind` value other than exactly `"monitor"` is treated as `"operator"` (see x-note on `POST /agents/hire`).
+
+| Field | Type | Required | Nullable | Description |
+|---|---|---|---|---|
+| kind | string (enum: monitor, operator) | Yes | No | Not runtime-validated — see description |
+| subtype | string | Yes | No | Must be a member of `AgentCatalogView.monitorTypes` or `.operatorTypes` per the effective kind |
+
+Constraints: Required: `kind`, `subtype`
+
+Example (generated from schema):
+
+```json
+{
+  "kind": "monitor",
+  "subtype": "string"
+}
+```
+
 ### `HealthStatus`
 
 Description: [NOT SPECIFIED]
@@ -6334,6 +6964,36 @@ Example (generated from schema):
 }
 ```
 
+### `MonitorEntity`
+
+Description: Tier-1 canonical standing monitor. In-memory array, seeded with 3 monitors at process start; new ones appended via `POST /agents/hire`. Resets on process restart.
+
+| Field | Type | Required | Nullable | Description |
+|---|---|---|---|---|
+| id | integer | Yes | No | auto-increment, starts after seed count |
+| name | string | Yes | No | equals `type` in v1 — no custom naming at hire time |
+| type | string | Yes | No | one of `AgentCatalogView.monitorTypes` |
+| status | string (enum: active, paused) | Yes | No | toggled via pause/resume |
+| signalsToday | integer | Yes | No | fixed at hire/seed time — not live-incrementing |
+| lastActivity | string (format: date-time) | Yes | No | updated on pause/resume |
+| createdAt | string (format: date-time) | Yes | No | |
+
+Constraints: Required: `id`, `name`, `type`, `status`, `signalsToday`, `lastActivity`, `createdAt`
+
+Example (generated from schema):
+
+```json
+{
+  "id": 0,
+  "name": "string",
+  "type": "string",
+  "status": "active",
+  "signalsToday": 0,
+  "lastActivity": "2026-08-01T00:00:00.000Z",
+  "createdAt": "2026-08-01T00:00:00.000Z"
+}
+```
+
 ### `NivoBarDatapoint`
 
 Description: [NOT SPECIFIED]
@@ -6398,6 +7058,34 @@ Example (generated from schema):
       "y": 0
     }
   ]
+}
+```
+
+### `OperatorView`
+
+Description: Tier-2 derived view — NOT a persisted Tier-1 entity (per plan.md, Operators are explicitly "derived"). In-memory array, seeded with 2 operators at process start; new ones appended via `POST /agents/hire` always with `trustLevel: "Low"`/`evidenceStatus: "unproven"` regardless of subtype, since no real Autonomy (SLICE-11) trust-ladder data source exists yet.
+
+| Field | Type | Required | Nullable | Description |
+|---|---|---|---|---|
+| id | integer | Yes | No | |
+| name | string | Yes | No | equals `type` |
+| type | string | Yes | No | one of `AgentCatalogView.operatorTypes` |
+| trustLevel | string (enum: Low, Medium, High) | Yes | No | v1 placeholder |
+| evidenceStatus | string (enum: evidence-backed, unproven) | Yes | No | v1 placeholder |
+| trackRecord | string | Yes | No | human-readable placeholder summary |
+
+Constraints: Required: `id`, `name`, `type`, `trustLevel`, `evidenceStatus`, `trackRecord`
+
+Example (generated from schema):
+
+```json
+{
+  "id": 0,
+  "name": "string",
+  "type": "string",
+  "trustLevel": "Low",
+  "evidenceStatus": "evidence-backed",
+  "trackRecord": "string"
 }
 ```
 
@@ -7206,6 +7894,36 @@ Example (generated from schema):
   "price": 0,
   "qty": 0,
   "status": "string"
+}
+```
+
+### `TaskAgentEntity`
+
+Description: Tier-1 canonical task agent. In-memory array, seeded with 2 task agents (one `running`, one `retired`) at process start. v1 has no creation endpoint — task agents are not programmatically spawned by other slices' events yet (see contract `open_q1_resolution` in `knowledge/contracts/slice-10-agents/contract.md`).
+
+| Field | Type | Required | Nullable | Description |
+|---|---|---|---|---|
+| id | integer | Yes | No | |
+| name | string | Yes | No | |
+| spawnedBy | string | Yes | No | human-readable description of what created it |
+| retirementCondition | string | Yes | No | human-readable description of when it retires |
+| status | string (enum: running, retired) | Yes | No | set to `retired` via `POST /agents/task-agents/{id}/retire`; no un-retire path |
+| openLink | string | Yes | No | a route path in this app, e.g. `/scenario` |
+| createdAt | string (format: date-time) | Yes | No | |
+
+Constraints: Required: `id`, `name`, `spawnedBy`, `retirementCondition`, `status`, `openLink`, `createdAt`
+
+Example (generated from schema):
+
+```json
+{
+  "id": 0,
+  "name": "string",
+  "spawnedBy": "string",
+  "retirementCondition": "string",
+  "status": "running",
+  "openLink": "string",
+  "createdAt": "2026-08-01T00:00:00.000Z"
 }
 ```
 
