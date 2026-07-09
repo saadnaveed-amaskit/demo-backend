@@ -6,9 +6,11 @@ import { CatalogController } from "./catalog/catalog.controller"
 import { CatalogService } from "./catalog/catalog.service"
 import { ProductGridController } from "./product-grid/product-grid.controller"
 import { ProductGridService } from "./product-grid/product-grid.service"
+import { GuardrailsController } from "./guardrails/guardrails.controller"
+import { GuardrailsService } from "./guardrails/guardrails.service"
 
 @Module({
-  controllers: [HealthController, FocusSetsController, CatalogController, ProductGridController],
-  providers: [FocusSetsService, CatalogService, ProductGridService],
+  controllers: [HealthController, FocusSetsController, CatalogController, ProductGridController, GuardrailsController],
+  providers: [FocusSetsService, CatalogService, ProductGridService, GuardrailsService],
 })
 export class AppModule {}
