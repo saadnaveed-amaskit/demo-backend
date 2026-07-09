@@ -12,9 +12,11 @@ import { PromotionsController } from "./promotions/promotions.controller"
 import { PromotionsService } from "./promotions/promotions.service"
 import { DiscountModelingController } from "./discount-modeling/discount-modeling.controller"
 import { DiscountModelingService } from "./discount-modeling/discount-modeling.service"
+import { PriceScenariosController } from "./price-scenarios/price-scenarios.controller"
+import { PriceScenariosService } from "./price-scenarios/price-scenarios.service"
 
 @Module({
-  controllers: [HealthController, FocusSetsController, CatalogController, ProductGridController, GuardrailsController, PromotionsController, DiscountModelingController],
-  providers: [FocusSetsService, CatalogService, ProductGridService, GuardrailsService, PromotionsService, DiscountModelingService],
+  controllers: [HealthController, FocusSetsController, CatalogController, ProductGridController, GuardrailsController, PromotionsController, DiscountModelingController, PriceScenariosController],
+  providers: [FocusSetsService, CatalogService, ProductGridService, GuardrailsService, PromotionsService, DiscountModelingService, PriceScenariosService],
 })
 export class AppModule {}
