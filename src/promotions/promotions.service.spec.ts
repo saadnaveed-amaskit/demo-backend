@@ -3,7 +3,6 @@ import { BadRequestException, NotFoundException } from "@nestjs/common"
 import { PromotionsService } from "./promotions.service"
 import { FocusSetsService } from "../focus-sets/focus-sets.service"
 
-const today = new Date().toISOString().slice(0, 10)
 const daysAgo = (n: number) =>
   new Date(Date.now() - n * 86400000).toISOString().slice(0, 10)
 const daysAhead = (n: number) =>
