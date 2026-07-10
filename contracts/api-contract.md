@@ -6,8 +6,8 @@
 |---|---|
 | Source YAML | **Not present.** `backend/contracts/api-contract.yaml` was deleted from `main` in commit `bb1a951` ("deleted redundant file") after SLICE-09. This Markdown file is now hand-maintained directly and is the sole canonical contract. |
 | Generated Markdown | `backend/contracts/api-contract.md` |
-| Backend branch | `agent/slice-11-pricing-autonomy` |
-| Backend commit SHA | _pending commit on this branch — see SLICE-11 validation report for the final PR commit_ |
+| Backend branch | `agent/slice-12-measurement` |
+| Backend commit SHA | _pending commit on this branch — see SLICE-12 validation report for the final PR commit_ |
 
 ## Contract Rules
 
@@ -64,6 +64,13 @@
 | PATCH | `/guardrails/{id}/active` | Toggle a guardrail's active flag | guardrails |
 | PATCH | `/guardrails/{id}/overridable` | Toggle a guardrail's isOverridable flag | guardrails |
 | GET | `/health` | Liveness check | health |
+| GET | `/measurement/experiments` | List all matched-cluster experiments | measurement |
+| GET | `/measurement/experiments/{id}` | Get an experiment (setup state + live readout if launched) | measurement |
+| POST | `/measurement/experiments/{id}/clusters/{clusterId}/move` | Move a cluster between treatment and control arms | measurement |
+| POST | `/measurement/experiments/{id}/acknowledge-cost` | Acknowledge the cost-of-control tradeoff | measurement |
+| POST | `/measurement/experiments/{id}/go-live` | Launch an experiment (gated on balance + cost acknowledgment) | measurement |
+| POST | `/measurement/experiments/{id}/scale` | Scale a live experiment's win to all matching SKUs | measurement |
+| POST | `/measurement/experiments/{id}/kill` | Kill a live experiment and revert its treatment clusters to BAU | measurement |
 | GET | `/price-scenarios` | List all price scenarios, newest id first | price-scenarios |
 | POST | `/price-scenarios` | Create a price scenario | price-scenarios |
 | DELETE | `/price-scenarios/{id}` | Delete a price scenario | price-scenarios |
@@ -4468,6 +4475,722 @@ Example (generated from schema):
 #### Related Schemas
 
 `HealthStatus`
+
+### `GET /measurement/experiments`
+
+Summary: List all matched-cluster experiments
+
+Description: Returns all in-memory seeded experiments (3 at process start: one setup experiment with an imbalanced block, one setup experiment with all blocks balanced, one live experiment already past the win boundary), each fully resolved (blocks, clusters, computed `goLiveEligible`/`goLiveBlockedReason`, and `readout` if launched).
+
+Tags: measurement
+
+Backend operationId: `listMeasurementExperiments`
+
+#### Request
+
+##### Path Parameters
+
+[NOT SPECIFIED]
+
+##### Query Parameters
+
+[NOT SPECIFIED]
+
+##### Headers
+
+[NOT SPECIFIED]
+
+##### Request Body
+
+Content type: [NOT SPECIFIED]
+
+Schema:
+
+[NOT SPECIFIED] (no request body for this endpoint)
+
+Notes: [NOT SPECIFIED]
+
+#### Responses
+
+##### `200`
+
+Description: OK
+
+Content type: application/json
+
+Schema:
+
+array of `ExperimentView`
+
+Example (generated from schema):
+
+```json
+[
+  {
+    "id": 0,
+    "name": "string",
+    "status": "setup",
+    "costAcknowledged": false,
+    "createdAt": "2026-08-01T00:00:00.000Z",
+    "blocks": [
+      {
+        "id": 0,
+        "label": "string",
+        "status": "Balanced",
+        "clusters": [
+          { "id": 0, "blockId": 0, "name": "string", "arm": "treatment", "bauPrice": 0, "mlPrice": 0, "crossElasticity": 0, "confidence": 0 }
+        ],
+        "metricMatch": { "revenue": 0, "grossMargin": 0, "velocity": 0 }
+      }
+    ],
+    "goLiveEligible": false,
+    "goLiveBlockedReason": "string",
+    "readout": null
+  }
+]
+```
+
+##### Error Responses
+
+[NOT SPECIFIED] (no documented error responses for this endpoint)
+
+#### Validation / Constraints
+
+[NOT SPECIFIED]
+
+#### Related Schemas
+
+`ExperimentView`, `BlockView`, `ClusterView`, `MetricMatch`, `ReadoutView`
+
+### `GET /measurement/experiments/{id}`
+
+Summary: Get an experiment (setup state + live readout if launched)
+
+Description: `blocks[].status` is computed on every read from each block's `metricMatch` ratios (Balanced when all three of revenue/grossMargin/velocity have a min/max ratio >= 0.8 — REQ-MEAS-014) and from whether the block currently has at least one treatment and one control cluster (`"Missing-an-arm"` otherwise, e.g. after moving a block's only treatment cluster to control). `goLiveEligible`/`goLiveBlockedReason` are likewise computed fresh on every read, not stored.
+
+Tags: measurement
+
+Backend operationId: `getMeasurementExperiment`
+
+#### Request
+
+##### Path Parameters
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| id | integer | Yes | Experiment id, parsed via ParseIntPipe (400 if non-numeric). |
+
+##### Query Parameters
+
+[NOT SPECIFIED]
+
+##### Headers
+
+[NOT SPECIFIED]
+
+##### Request Body
+
+Content type: [NOT SPECIFIED]
+
+Schema:
+
+[NOT SPECIFIED] (no request body for this endpoint)
+
+Notes: [NOT SPECIFIED]
+
+#### Responses
+
+##### `200`
+
+Description: OK
+
+Content type: application/json
+
+Schema:
+
+`ExperimentView`
+
+Example (generated from schema, live/win case):
+
+```json
+{
+  "id": 3,
+  "name": "Clearance Push — Footwear",
+  "status": "live",
+  "costAcknowledged": true,
+  "createdAt": "2026-06-20T00:00:00.000Z",
+  "blocks": [
+    {
+      "id": 4,
+      "label": "Block A",
+      "status": "Balanced",
+      "clusters": [
+        { "id": 40, "blockId": 4, "name": "Cluster 40", "arm": "treatment", "bauPrice": 34.99, "mlPrice": 27.99, "crossElasticity": 0.55, "confidence": 0.9 },
+        { "id": 41, "blockId": 4, "name": "Cluster 41", "arm": "control", "bauPrice": 34.99, "mlPrice": null, "crossElasticity": 0.5, "confidence": 0.88 }
+      ],
+      "metricMatch": { "revenue": 0.93, "grossMargin": 0.9, "velocity": 0.88 }
+    }
+  ],
+  "goLiveEligible": false,
+  "goLiveBlockedReason": "Cannot go live: experiment status is \"live\"",
+  "readout": {
+    "probabilityOfWinning": 0.97,
+    "day": 14,
+    "verdict": "win",
+    "incrementalMargin": { "estimate": 42000, "lower": 28000, "upper": 56000 },
+    "clusterContributions": [{ "clusterId": 40, "name": "Cluster 40", "contribution": 42000 }]
+  }
+}
+```
+
+##### Error Responses
+
+**`404`**
+
+Description: Experiment id not found.
+
+Schema: `ErrorResponse`
+
+Example (generated from schema):
+
+```json
+{
+  "statusCode": 0,
+  "message": "string",
+  "error": "string"
+}
+```
+
+#### Validation / Constraints
+
+[NOT SPECIFIED]
+
+#### Related Schemas
+
+`ExperimentView`, `BlockView`, `ClusterView`, `ReadoutView`, `ErrorResponse`
+
+### `POST /measurement/experiments/{id}/clusters/{clusterId}/move`
+
+Summary: Move a cluster between treatment and control arms
+
+Description: Sets the cluster's arm. When moved to `"control"`, `mlPrice` becomes `null` in every subsequent read (control runs BAU pricing — REQ-MEAS-007); the underlying ML recommendation is retained internally and restored if the cluster is later moved back to `"treatment"`. Returns only the updated cluster, not the whole experiment.
+
+Tags: measurement
+
+Backend operationId: `moveMeasurementCluster`
+
+#### Request
+
+##### Path Parameters
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| id | integer | Yes | Experiment id, parsed via ParseIntPipe (400 if non-numeric). |
+| clusterId | integer | Yes | Cluster id, parsed via ParseIntPipe (400 if non-numeric). |
+
+##### Query Parameters
+
+[NOT SPECIFIED]
+
+##### Headers
+
+[NOT SPECIFIED]
+
+##### Request Body
+
+Content type: application/json
+
+Schema:
+
+`MoveClusterDto`
+
+Example (generated from schema):
+
+```json
+{
+  "arm": "control"
+}
+```
+
+Notes: Request body is required.
+
+#### Responses
+
+##### `200`
+
+Description: OK (explicit `@HttpCode(200)`)
+
+Content type: application/json
+
+Schema:
+
+`ClusterView`
+
+Example (generated from schema):
+
+```json
+{
+  "id": 10,
+  "blockId": 3,
+  "name": "Cluster 10",
+  "arm": "control",
+  "bauPrice": 29.99,
+  "mlPrice": null,
+  "crossElasticity": 0.4,
+  "confidence": 0.82
+}
+```
+
+##### Error Responses
+
+**`400`**
+
+Description: `arm` is missing or not exactly `"treatment"` or `"control"`.
+
+Schema: `ErrorResponse`
+
+Example (generated from schema):
+
+```json
+{
+  "statusCode": 0,
+  "message": "string",
+  "error": "string"
+}
+```
+
+**`404`**
+
+Description: Experiment id not found, or cluster id not found within that experiment.
+
+Schema: `ErrorResponse`
+
+Example (generated from schema):
+
+```json
+{
+  "statusCode": 0,
+  "message": "string",
+  "error": "string"
+}
+```
+
+#### Validation / Constraints
+
+- Required request body fields: `arm`
+- `arm` enum: treatment, control
+
+#### Related Schemas
+
+`ClusterView`, `MoveClusterDto`, `ErrorResponse`
+
+### `POST /measurement/experiments/{id}/acknowledge-cost`
+
+Summary: Acknowledge the cost-of-control tradeoff
+
+Description: Sets `costAcknowledged: true` (REQ-MEAS-005). Does not by itself change `status` or `goLiveEligible` unless all blocks are also already Balanced.
+
+Tags: measurement
+
+Backend operationId: `acknowledgeMeasurementCost`
+
+#### Request
+
+##### Path Parameters
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| id | integer | Yes | Experiment id, parsed via ParseIntPipe (400 if non-numeric). |
+
+##### Query Parameters
+
+[NOT SPECIFIED]
+
+##### Headers
+
+[NOT SPECIFIED]
+
+##### Request Body
+
+Content type: [NOT SPECIFIED]
+
+Schema:
+
+[NOT SPECIFIED] (no request body for this endpoint)
+
+Notes: [NOT SPECIFIED]
+
+#### Responses
+
+##### `200`
+
+Description: OK (explicit `@HttpCode(200)`)
+
+Content type: application/json
+
+Schema:
+
+`ExperimentView`
+
+Example (generated from schema):
+
+```json
+{
+  "id": 2,
+  "name": "Promo Depth Test — Boys Outerwear",
+  "status": "setup",
+  "costAcknowledged": true,
+  "createdAt": "2026-07-02T00:00:00.000Z",
+  "blocks": [
+    {
+      "id": 3,
+      "label": "Block A",
+      "status": "Balanced",
+      "clusters": [
+        { "id": 10, "blockId": 3, "name": "Cluster 10", "arm": "treatment", "bauPrice": 29.99, "mlPrice": 24.99, "crossElasticity": 0.4, "confidence": 0.82 },
+        { "id": 11, "blockId": 3, "name": "Cluster 11", "arm": "control", "bauPrice": 19.99, "mlPrice": null, "crossElasticity": 0.3, "confidence": 0.75 }
+      ],
+      "metricMatch": { "revenue": 0.9, "grossMargin": 0.88, "velocity": 0.85 }
+    }
+  ],
+  "goLiveEligible": true,
+  "goLiveBlockedReason": null,
+  "readout": null
+}
+```
+
+##### Error Responses
+
+**`404`**
+
+Description: Experiment id not found.
+
+Schema: `ErrorResponse`
+
+Example (generated from schema):
+
+```json
+{
+  "statusCode": 0,
+  "message": "string",
+  "error": "string"
+}
+```
+
+#### Validation / Constraints
+
+[NOT SPECIFIED]
+
+#### Related Schemas
+
+`ExperimentView`, `ErrorResponse`
+
+### `POST /measurement/experiments/{id}/go-live`
+
+Summary: Launch an experiment (gated on balance + cost acknowledgment)
+
+Description: Blocked (400) unless the experiment's status is `"setup"`, every block is `"Balanced"`, and `costAcknowledged` is `true` (REQ-MEAS-005/006). On success, sets `status: "live"` and initializes `readout` with `verdict: "gathering"`, `day: 1`, `probabilityOfWinning: 0.5` (v1 placeholder trajectory — real sequential-estimator computation is out of scope for this slice, consistent with the spec's placeholder annotation).
+
+Tags: measurement
+
+Backend operationId: `goLiveMeasurementExperiment`
+
+#### Request
+
+##### Path Parameters
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| id | integer | Yes | Experiment id, parsed via ParseIntPipe (400 if non-numeric). |
+
+##### Query Parameters
+
+[NOT SPECIFIED]
+
+##### Headers
+
+[NOT SPECIFIED]
+
+##### Request Body
+
+Content type: [NOT SPECIFIED]
+
+Schema:
+
+[NOT SPECIFIED] (no request body for this endpoint)
+
+Notes: [NOT SPECIFIED]
+
+#### Responses
+
+##### `200`
+
+Description: OK (explicit `@HttpCode(200)`)
+
+Content type: application/json
+
+Schema:
+
+`ExperimentView`
+
+Example (generated from schema):
+
+```json
+{
+  "id": 2,
+  "name": "Promo Depth Test — Boys Outerwear",
+  "status": "live",
+  "costAcknowledged": true,
+  "createdAt": "2026-07-02T00:00:00.000Z",
+  "blocks": [
+    {
+      "id": 3,
+      "label": "Block A",
+      "status": "Balanced",
+      "clusters": [
+        { "id": 10, "blockId": 3, "name": "Cluster 10", "arm": "treatment", "bauPrice": 29.99, "mlPrice": 24.99, "crossElasticity": 0.4, "confidence": 0.82 },
+        { "id": 11, "blockId": 3, "name": "Cluster 11", "arm": "control", "bauPrice": 19.99, "mlPrice": null, "crossElasticity": 0.3, "confidence": 0.75 }
+      ],
+      "metricMatch": { "revenue": 0.9, "grossMargin": 0.88, "velocity": 0.85 }
+    }
+  ],
+  "goLiveEligible": false,
+  "goLiveBlockedReason": "Cannot go live: experiment status is \"live\"",
+  "readout": {
+    "probabilityOfWinning": 0.5,
+    "day": 1,
+    "verdict": "gathering",
+    "incrementalMargin": { "estimate": 0, "lower": 0, "upper": 0 },
+    "clusterContributions": []
+  }
+}
+```
+
+##### Error Responses
+
+**`400`**
+
+Description: Not all blocks are balanced and/or the cost of control has not been acknowledged, or the experiment is not in `"setup"` status. The response `message` is a human-readable, non-empty blocked reason (e.g. `"1 block is imbalanced and the cost of control has not been acknowledged"`).
+
+Schema: `ErrorResponse`
+
+Example (generated from schema):
+
+```json
+{
+  "statusCode": 0,
+  "message": "string",
+  "error": "string"
+}
+```
+
+**`404`**
+
+Description: Experiment id not found.
+
+Schema: `ErrorResponse`
+
+Example (generated from schema):
+
+```json
+{
+  "statusCode": 0,
+  "message": "string",
+  "error": "string"
+}
+```
+
+#### Validation / Constraints
+
+- x-note: verdict boundaries and initial readout values are v1 placeholders (spec Open Question 1/9).
+
+#### Related Schemas
+
+`ExperimentView`, `ReadoutView`, `ErrorResponse`
+
+### `POST /measurement/experiments/{id}/scale`
+
+Summary: Scale a live experiment's win to all matching SKUs
+
+Description: Only accepts an experiment currently `"live"`; sets `status: "concluded"`. Cluster arms are left unchanged (scaling the win to all matching SKUs beyond the tested clusters is not modeled further in this v1 placeholder — REQ-MEAS-011).
+
+Tags: measurement
+
+Backend operationId: `scaleMeasurementExperiment`
+
+#### Request
+
+##### Path Parameters
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| id | integer | Yes | Experiment id, parsed via ParseIntPipe (400 if non-numeric). |
+
+##### Query Parameters
+
+[NOT SPECIFIED]
+
+##### Headers
+
+[NOT SPECIFIED]
+
+##### Request Body
+
+Content type: [NOT SPECIFIED]
+
+Schema:
+
+[NOT SPECIFIED] (no request body for this endpoint)
+
+Notes: [NOT SPECIFIED]
+
+#### Responses
+
+##### `200`
+
+Description: OK (explicit `@HttpCode(200)`)
+
+Content type: application/json
+
+Schema:
+
+`ExperimentView`
+
+Example (generated from schema): same shape as `GET /measurement/experiments/{id}` with `"status": "concluded"`.
+
+##### Error Responses
+
+**`400`**
+
+Description: Experiment status is not `"live"`.
+
+Schema: `ErrorResponse`
+
+Example (generated from schema):
+
+```json
+{
+  "statusCode": 0,
+  "message": "string",
+  "error": "string"
+}
+```
+
+**`404`**
+
+Description: Experiment id not found.
+
+Schema: `ErrorResponse`
+
+Example (generated from schema):
+
+```json
+{
+  "statusCode": 0,
+  "message": "string",
+  "error": "string"
+}
+```
+
+#### Validation / Constraints
+
+[NOT SPECIFIED]
+
+#### Related Schemas
+
+`ExperimentView`, `ErrorResponse`
+
+### `POST /measurement/experiments/{id}/kill`
+
+Summary: Kill a live experiment and revert its treatment clusters to BAU
+
+Description: Only accepts an experiment currently `"live"`; sets `status: "concluded"` and moves every `"treatment"` cluster across all blocks to `"control"` (reverting to BAU pricing — REQ-MEAS-011).
+
+Tags: measurement
+
+Backend operationId: `killMeasurementExperiment`
+
+#### Request
+
+##### Path Parameters
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| id | integer | Yes | Experiment id, parsed via ParseIntPipe (400 if non-numeric). |
+
+##### Query Parameters
+
+[NOT SPECIFIED]
+
+##### Headers
+
+[NOT SPECIFIED]
+
+##### Request Body
+
+Content type: [NOT SPECIFIED]
+
+Schema:
+
+[NOT SPECIFIED] (no request body for this endpoint)
+
+Notes: [NOT SPECIFIED]
+
+#### Responses
+
+##### `200`
+
+Description: OK (explicit `@HttpCode(200)`)
+
+Content type: application/json
+
+Schema:
+
+`ExperimentView`
+
+Example (generated from schema): same shape as `GET /measurement/experiments/{id}` with `"status": "concluded"` and all clusters `"arm": "control"`.
+
+##### Error Responses
+
+**`400`**
+
+Description: Experiment status is not `"live"`.
+
+Schema: `ErrorResponse`
+
+Example (generated from schema):
+
+```json
+{
+  "statusCode": 0,
+  "message": "string",
+  "error": "string"
+}
+```
+
+**`404`**
+
+Description: Experiment id not found.
+
+Schema: `ErrorResponse`
+
+Example (generated from schema):
+
+```json
+{
+  "statusCode": 0,
+  "message": "string",
+  "error": "string"
+}
+```
+
+#### Validation / Constraints
+
+[NOT SPECIFIED]
+
+#### Related Schemas
+
+`ExperimentView`, `ErrorResponse`
 
 ### `GET /price-scenarios`
 
