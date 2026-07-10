@@ -20,9 +20,11 @@ import { AgentsController } from "./agents/agents.controller"
 import { AgentsService } from "./agents/agents.service"
 import { AutonomyController } from "./autonomy/autonomy.controller"
 import { AutonomyService } from "./autonomy/autonomy.service"
+import { MeasurementController } from "./measurement/measurement.controller"
+import { MeasurementService } from "./measurement/measurement.service"
 
 @Module({
-  controllers: [HealthController, FocusSetsController, CatalogController, ProductGridController, GuardrailsController, PromotionsController, DiscountModelingController, PriceScenariosController, ApprovalsController, AgentsController, AutonomyController],
-  providers: [FocusSetsService, CatalogService, ProductGridService, GuardrailsService, PromotionsService, DiscountModelingService, PriceScenariosService, ApprovalsService, AgentsService, AutonomyService],
+  controllers: [HealthController, FocusSetsController, CatalogController, ProductGridController, GuardrailsController, PromotionsController, DiscountModelingController, PriceScenariosController, ApprovalsController, AgentsController, AutonomyController, MeasurementController],
+  providers: [FocusSetsService, CatalogService, ProductGridService, GuardrailsService, PromotionsService, DiscountModelingService, PriceScenariosService, ApprovalsService, AgentsService, AutonomyService, MeasurementService],
 })
 export class AppModule {}
