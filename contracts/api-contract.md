@@ -6,8 +6,8 @@
 |---|---|
 | Source YAML | **Not present.** `backend/contracts/api-contract.yaml` was deleted from `main` in commit `bb1a951` ("deleted redundant file") after SLICE-09. This Markdown file is now hand-maintained directly and is the sole canonical contract. |
 | Generated Markdown | `backend/contracts/api-contract.md` |
-| Backend branch | `agent/slice-10-agent-roster` |
-| Backend commit SHA | _pending commit on this branch — see SLICE-10 validation report for the final PR commit_ |
+| Backend branch | `agent/slice-11-pricing-autonomy` |
+| Backend commit SHA | _pending commit on this branch — see SLICE-11 validation report for the final PR commit_ |
 
 ## Contract Rules
 
@@ -32,6 +32,14 @@
 | GET | `/approvals/queue` | List pending price scenarios and discount models awaiting decision | approvals |
 | POST | `/approvals/scenarios/{id}/decision` | Approve, deny, or request changes on a pending price scenario | approvals |
 | GET | `/approvals/scenarios/{id}/review` | Get the full scenario output for approval-mode review | approvals |
+| GET | `/autonomy/action-classes/{id}/audit` | Get the audit trail for an action class | autonomy |
+| POST | `/autonomy/action-classes/{id}/demote` | Demote an action class's trust rung (never gated) | autonomy |
+| POST | `/autonomy/action-classes/{id}/promote` | Promote an action class's trust rung (gated) | autonomy |
+| POST | `/autonomy/kill-switch/disengage` | Disengage the emergency kill switch | autonomy |
+| POST | `/autonomy/kill-switch/engage` | Engage the emergency kill switch | autonomy |
+| POST | `/autonomy/live-actions/{id}/undo` | Undo an applied live action | autonomy |
+| POST | `/autonomy/live-actions/{id}/veto` | Veto a pending live action | autonomy |
+| GET | `/autonomy/roster` | Get the full autonomy roster (KPIs, action classes, live actions, kill-switch state) | autonomy |
 | GET | `/catalog/attributes` | List filterable catalog attributes and their observed values | catalog |
 | GET | `/discount-models` | List all discount models, newest id first | discount-models |
 | POST | `/discount-models` | Create a discount model | discount-models |
@@ -1320,6 +1328,703 @@ Example (generated from schema):
 #### Related Schemas
 
 `ApprovalItemView`, `ChangeRequest`, `ComparisonRow`, `ErrorResponse`, `FrontierPoint`, `Recommendation`, `ScenarioGuardrailCheck`, `ScenarioOutput`, `ScenarioReviewView`
+
+### `GET /autonomy/action-classes/{id}/audit`
+
+Summary: Get the audit trail for an action class
+
+Description: Returns all audit entries recorded for this action class (promote/demote/veto/undo actions), newest-last (insertion order, not sorted).
+
+Tags: autonomy
+
+Backend operationId: `getAutonomyAudit`
+
+#### Request
+
+##### Path Parameters
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| id | integer | Yes | Action class id, parsed via ParseIntPipe (400 if non-numeric). |
+
+##### Query Parameters
+
+[NOT SPECIFIED]
+
+##### Headers
+
+[NOT SPECIFIED]
+
+##### Request Body
+
+Content type: [NOT SPECIFIED]
+
+Schema:
+
+[NOT SPECIFIED] (no request body for this endpoint)
+
+Notes: [NOT SPECIFIED]
+
+#### Responses
+
+##### `200`
+
+Description: OK
+
+Content type: application/json
+
+Schema:
+
+array of `AuditEntry`
+
+Example (generated from schema):
+
+```json
+[
+  {
+    "id": 0,
+    "actionClassId": 0,
+    "action": "string",
+    "actor": "string",
+    "timestamp": "2026-08-01T00:00:00.000Z"
+  }
+]
+```
+
+##### Error Responses
+
+**`404`**
+
+Description: Action class id not found.
+
+Schema: `ErrorResponse`
+
+Example (generated from schema):
+
+```json
+{
+  "statusCode": 0,
+  "message": "string",
+  "error": "string"
+}
+```
+
+#### Validation / Constraints
+
+[NOT SPECIFIED]
+
+#### Related Schemas
+
+`AuditEntry`, `ErrorResponse`
+
+### `POST /autonomy/action-classes/{id}/demote`
+
+Summary: Demote an action class's trust rung (never gated)
+
+Description: Downgrades `trustRung` one rung (`Autonomous` → `Supervised` → `Manual`, floor at `Manual`). x-note: unlike promote, demote is NOT blocked while the kill switch is engaged (REQ-AUTO-006 explicitly allows demotion at any time).
+
+Tags: autonomy
+
+Backend operationId: `demoteActionClass`
+
+#### Request
+
+##### Path Parameters
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| id | integer | Yes | Action class id, parsed via ParseIntPipe (400 if non-numeric). |
+
+##### Query Parameters
+
+[NOT SPECIFIED]
+
+##### Headers
+
+[NOT SPECIFIED]
+
+##### Request Body
+
+Content type: [NOT SPECIFIED]
+
+Schema:
+
+[NOT SPECIFIED] (no request body for this endpoint)
+
+Notes: [NOT SPECIFIED]
+
+#### Responses
+
+##### `200`
+
+Description: OK (explicit `@HttpCode(200)`)
+
+Content type: application/json
+
+Schema:
+
+`ActionClassEntity`
+
+Example (generated from schema):
+
+```json
+{
+  "id": 0,
+  "name": "string",
+  "trustRung": "Manual",
+  "reversibilityClass": "Low",
+  "atReversibilityCeiling": false,
+  "sampleCount": 0,
+  "accuracy": 0,
+  "acceptanceRate": 0,
+  "liveDollarValue": 0,
+  "createdAt": "2026-08-01T00:00:00.000Z"
+}
+```
+
+##### Error Responses
+
+**`404`**
+
+Description: Action class id not found.
+
+Schema: `ErrorResponse`
+
+Example (generated from schema):
+
+```json
+{
+  "statusCode": 0,
+  "message": "string",
+  "error": "string"
+}
+```
+
+#### Validation / Constraints
+
+[NOT SPECIFIED]
+
+#### Related Schemas
+
+`ActionClassEntity`, `ErrorResponse`
+
+### `POST /autonomy/action-classes/{id}/promote`
+
+Summary: Promote an action class's trust rung (gated)
+
+Description: Advances `trustRung` one rung (`Manual` → `Supervised` → `Autonomous`, ceiling at `Autonomous`), subject to ordered gates (REQ-AUTO-009): kill switch disengaged, then reversibility ceiling, then sample count ≥ 100, then accuracy ≥ 0.85, then acceptance rate ≥ 0.80. The first failing gate's message is returned as the 400 body.
+
+Tags: autonomy
+
+Backend operationId: `promoteActionClass`
+
+#### Request
+
+##### Path Parameters
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| id | integer | Yes | Action class id, parsed via ParseIntPipe (400 if non-numeric). |
+
+##### Query Parameters
+
+[NOT SPECIFIED]
+
+##### Headers
+
+[NOT SPECIFIED]
+
+##### Request Body
+
+Content type: [NOT SPECIFIED]
+
+Schema:
+
+[NOT SPECIFIED] (no request body for this endpoint)
+
+Notes: [NOT SPECIFIED]
+
+#### Responses
+
+##### `200`
+
+Description: OK (explicit `@HttpCode(200)`)
+
+Content type: application/json
+
+Schema:
+
+`ActionClassEntity`
+
+Example (generated from schema):
+
+```json
+{
+  "id": 0,
+  "name": "string",
+  "trustRung": "Manual",
+  "reversibilityClass": "Low",
+  "atReversibilityCeiling": false,
+  "sampleCount": 0,
+  "accuracy": 0,
+  "acceptanceRate": 0,
+  "liveDollarValue": 0,
+  "createdAt": "2026-08-01T00:00:00.000Z"
+}
+```
+
+##### Error Responses
+
+**`400`**
+
+Description: Blocked by the kill switch being engaged, or by the first failing ordered promotion gate (reversibility ceiling → sample count → accuracy → acceptance rate).
+
+Schema: `ErrorResponse`
+
+Example (generated from schema):
+
+```json
+{
+  "statusCode": 0,
+  "message": "string",
+  "error": "string"
+}
+```
+
+**`404`**
+
+Description: Action class id not found.
+
+Schema: `ErrorResponse`
+
+Example (generated from schema):
+
+```json
+{
+  "statusCode": 0,
+  "message": "string",
+  "error": "string"
+}
+```
+
+#### Validation / Constraints
+
+- x-note: promotion-gate order and thresholds are v1 placeholders (see `knowledge/contracts/slice-11-autonomy/contract.md`).
+
+#### Related Schemas
+
+`ActionClassEntity`, `ErrorResponse`
+
+### `POST /autonomy/kill-switch/disengage`
+
+Summary: Disengage the emergency kill switch
+
+Description: Sets the process-wide `killSwitchEngaged` flag to `false`. No countdown state is reset — any in-flight veto countdown resumes from wherever it was.
+
+Tags: autonomy
+
+Backend operationId: `disengageKillSwitch`
+
+#### Request
+
+##### Path Parameters
+
+[NOT SPECIFIED]
+
+##### Query Parameters
+
+[NOT SPECIFIED]
+
+##### Headers
+
+[NOT SPECIFIED]
+
+##### Request Body
+
+Content type: [NOT SPECIFIED]
+
+Schema:
+
+[NOT SPECIFIED] (no request body for this endpoint)
+
+Notes: [NOT SPECIFIED]
+
+#### Responses
+
+##### `200`
+
+Description: OK (explicit `@HttpCode(200)`)
+
+Content type: application/json
+
+Schema:
+
+`KillSwitchState`
+
+Example (generated from schema):
+
+```json
+{
+  "killSwitchEngaged": false
+}
+```
+
+##### Error Responses
+
+[NOT SPECIFIED] (no documented error responses for this endpoint)
+
+#### Validation / Constraints
+
+[NOT SPECIFIED]
+
+#### Related Schemas
+
+`KillSwitchState`
+
+### `POST /autonomy/kill-switch/engage`
+
+Summary: Engage the emergency kill switch
+
+Description: Sets the process-wide `killSwitchEngaged` flag to `true`. x-note: no request body, no confirmation step — a single POST immediately engages it. While engaged, `promote`, `veto`, and `undo` all throw 400 (`demote` is unaffected, per REQ-AUTO-006).
+
+Tags: autonomy
+
+Backend operationId: `engageKillSwitch`
+
+#### Request
+
+##### Path Parameters
+
+[NOT SPECIFIED]
+
+##### Query Parameters
+
+[NOT SPECIFIED]
+
+##### Headers
+
+[NOT SPECIFIED]
+
+##### Request Body
+
+Content type: [NOT SPECIFIED]
+
+Schema:
+
+[NOT SPECIFIED] (no request body for this endpoint)
+
+Notes: [NOT SPECIFIED]
+
+#### Responses
+
+##### `200`
+
+Description: OK (explicit `@HttpCode(200)`)
+
+Content type: application/json
+
+Schema:
+
+`KillSwitchState`
+
+Example (generated from schema):
+
+```json
+{
+  "killSwitchEngaged": true
+}
+```
+
+##### Error Responses
+
+[NOT SPECIFIED] (no documented error responses for this endpoint)
+
+#### Validation / Constraints
+
+[NOT SPECIFIED]
+
+#### Related Schemas
+
+`KillSwitchState`
+
+### `POST /autonomy/live-actions/{id}/undo`
+
+Summary: Undo an applied live action
+
+Description: Only accepts a live action currently `"applied"`; sets `status: "undone"` and records an audit entry against its `actionClassId`.
+
+Tags: autonomy
+
+Backend operationId: `undoLiveAction`
+
+#### Request
+
+##### Path Parameters
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| id | integer | Yes | Live action id, parsed via ParseIntPipe (400 if non-numeric). |
+
+##### Query Parameters
+
+[NOT SPECIFIED]
+
+##### Headers
+
+[NOT SPECIFIED]
+
+##### Request Body
+
+Content type: [NOT SPECIFIED]
+
+Schema:
+
+[NOT SPECIFIED] (no request body for this endpoint)
+
+Notes: [NOT SPECIFIED]
+
+#### Responses
+
+##### `200`
+
+Description: OK (explicit `@HttpCode(200)`)
+
+Content type: application/json
+
+Schema:
+
+`LiveActionEntity`
+
+Example (generated from schema):
+
+```json
+{
+  "id": 0,
+  "actionClassId": 0,
+  "description": "string",
+  "status": "pending",
+  "vetoWindowSeconds": 0,
+  "engagedAt": "2026-08-01T00:00:00.000Z"
+}
+```
+
+##### Error Responses
+
+**`400`**
+
+Description: Blocked by the kill switch being engaged, or live action status is not `"applied"`.
+
+Schema: `ErrorResponse`
+
+Example (generated from schema):
+
+```json
+{
+  "statusCode": 0,
+  "message": "string",
+  "error": "string"
+}
+```
+
+**`404`**
+
+Description: Live action id not found.
+
+Schema: `ErrorResponse`
+
+Example (generated from schema):
+
+```json
+{
+  "statusCode": 0,
+  "message": "string",
+  "error": "string"
+}
+```
+
+#### Validation / Constraints
+
+[NOT SPECIFIED]
+
+#### Related Schemas
+
+`LiveActionEntity`, `ErrorResponse`
+
+### `POST /autonomy/live-actions/{id}/veto`
+
+Summary: Veto a pending live action
+
+Description: Only accepts a live action currently `"pending"`; sets `status: "vetoed"` and records an audit entry against its `actionClassId`.
+
+Tags: autonomy
+
+Backend operationId: `vetoLiveAction`
+
+#### Request
+
+##### Path Parameters
+
+| Name | Type | Required | Description |
+|---|---|---|---|
+| id | integer | Yes | Live action id, parsed via ParseIntPipe (400 if non-numeric). |
+
+##### Query Parameters
+
+[NOT SPECIFIED]
+
+##### Headers
+
+[NOT SPECIFIED]
+
+##### Request Body
+
+Content type: [NOT SPECIFIED]
+
+Schema:
+
+[NOT SPECIFIED] (no request body for this endpoint)
+
+Notes: [NOT SPECIFIED]
+
+#### Responses
+
+##### `200`
+
+Description: OK (explicit `@HttpCode(200)`)
+
+Content type: application/json
+
+Schema:
+
+`LiveActionEntity`
+
+Example (generated from schema):
+
+```json
+{
+  "id": 0,
+  "actionClassId": 0,
+  "description": "string",
+  "status": "pending",
+  "vetoWindowSeconds": 0,
+  "engagedAt": "2026-08-01T00:00:00.000Z"
+}
+```
+
+##### Error Responses
+
+**`400`**
+
+Description: Blocked by the kill switch being engaged, or live action status is not `"pending"`.
+
+Schema: `ErrorResponse`
+
+Example (generated from schema):
+
+```json
+{
+  "statusCode": 0,
+  "message": "string",
+  "error": "string"
+}
+```
+
+**`404`**
+
+Description: Live action id not found.
+
+Schema: `ErrorResponse`
+
+Example (generated from schema):
+
+```json
+{
+  "statusCode": 0,
+  "message": "string",
+  "error": "string"
+}
+```
+
+#### Validation / Constraints
+
+[NOT SPECIFIED]
+
+#### Related Schemas
+
+`LiveActionEntity`, `ErrorResponse`
+
+### `GET /autonomy/roster`
+
+Summary: Get the full autonomy roster (KPIs, action classes, live actions, kill-switch state)
+
+Description: Aggregates all in-memory autonomy state on every read. `kpis.eligibleToPromote` only checks `atReversibilityCeiling`, NOT the sample-count/accuracy/acceptance-rate gates — an action class can be counted "eligible" here and still be blocked by `promote` on a later gate.
+
+Tags: autonomy
+
+Backend operationId: `getAutonomyRoster`
+
+#### Request
+
+##### Path Parameters
+
+[NOT SPECIFIED]
+
+##### Query Parameters
+
+[NOT SPECIFIED]
+
+##### Headers
+
+[NOT SPECIFIED]
+
+##### Request Body
+
+Content type: [NOT SPECIFIED]
+
+Schema:
+
+[NOT SPECIFIED] (no request body for this endpoint)
+
+Notes: [NOT SPECIFIED]
+
+#### Responses
+
+##### `200`
+
+Description: OK
+
+Content type: application/json
+
+Schema:
+
+`AutonomyRosterView`
+
+Example (generated from schema):
+
+```json
+{
+  "kpis": { "totalActionClasses": 0, "eligibleToPromote": 0, "totalLiveDollarValue": 0, "averageProofAccuracy": 0 },
+  "actionClasses": [
+    { "id": 0, "name": "string", "trustRung": "Manual", "reversibilityClass": "Low", "atReversibilityCeiling": false, "sampleCount": 0, "accuracy": 0, "acceptanceRate": 0, "liveDollarValue": 0, "createdAt": "2026-08-01T00:00:00.000Z" }
+  ],
+  "liveActions": [
+    { "id": 0, "actionClassId": 0, "description": "string", "status": "pending", "vetoWindowSeconds": 0, "engagedAt": "2026-08-01T00:00:00.000Z" }
+  ],
+  "killSwitchEngaged": false
+}
+```
+
+##### Error Responses
+
+[NOT SPECIFIED] (no documented error responses for this endpoint)
+
+#### Validation / Constraints
+
+[NOT SPECIFIED]
+
+#### Related Schemas
+
+`AutonomyRosterView`, `AutonomyKpis`, `ActionClassEntity`, `LiveActionEntity`
 
 ### `GET /catalog/attributes`
 
@@ -5692,6 +6397,42 @@ Example (generated from schema):
 
 ## Schemas
 
+### `ActionClassEntity`
+
+Description: Tier-1 canonical action class — the unit of trust-ladder governance (SLICE-11 Pricing Autonomy).
+
+| Field | Type | Required | Nullable | Description |
+|---|---|---|---|---|
+| id | integer | Yes | No | |
+| name | string | Yes | No | |
+| trustRung | string (enum: Manual, Supervised, Autonomous) | Yes | No | 3-level trust ladder |
+| reversibilityClass | string (enum: Low, Medium, High) | Yes | No | how hard this action class's changes are to reverse |
+| atReversibilityCeiling | boolean | Yes | No | computed at read time: `trustRung === REVERSIBILITY_CEILING[reversibilityClass]` |
+| sampleCount | integer | Yes | No | promotion gate input |
+| accuracy | number | Yes | No | 0–1, promotion gate input |
+| acceptanceRate | number | Yes | No | 0–1, promotion gate input |
+| liveDollarValue | number | No | No | $ currently live under autonomy for this action class |
+| createdAt | string (format: date-time) | No | No | |
+
+Constraints: Required: `id`, `name`, `trustRung`, `reversibilityClass`, `atReversibilityCeiling`, `sampleCount`, `accuracy`, `acceptanceRate`. `liveDollarValue`/`createdAt` are optional only so the SLICE-11 preparation-phase contract test's mock (predating these fields) still type-checks unmodified — the real endpoint always populates them.
+
+Example (generated from schema):
+
+```json
+{
+  "id": 0,
+  "name": "string",
+  "trustRung": "Manual",
+  "reversibilityClass": "Low",
+  "atReversibilityCeiling": false,
+  "sampleCount": 0,
+  "accuracy": 0,
+  "acceptanceRate": 0,
+  "liveDollarValue": 0,
+  "createdAt": "2026-08-01T00:00:00.000Z"
+}
+```
+
 ### `AgentCatalogView`
 
 Description: Fixed, hardcoded provisionable catalog (`MONITOR_TYPES`, `OPERATOR_TYPES` constants in `agents.service.ts`) — not configurable at runtime.
@@ -5948,6 +6689,80 @@ Example (generated from schema):
   "values": [
     "string"
   ]
+}
+```
+
+### `AuditEntry`
+
+Description: Tier-1 canonical audit-trail entry for an action class (SLICE-11).
+
+| Field | Type | Required | Nullable | Description |
+|---|---|---|---|---|
+| id | integer | Yes | No | |
+| actionClassId | integer | Yes | No | FK → ActionClassEntity.id |
+| action | string | Yes | No | human-readable description, e.g. "Promoted to Autonomous" |
+| actor | string | Yes | No | v1 placeholder — always `"Pricing Strategist"`, no real identity capture |
+| timestamp | string (format: date-time) | Yes | No | |
+
+Constraints: Required: `id`, `actionClassId`, `action`, `actor`, `timestamp`
+
+Example (generated from schema):
+
+```json
+{
+  "id": 0,
+  "actionClassId": 0,
+  "action": "string",
+  "actor": "string",
+  "timestamp": "2026-08-01T00:00:00.000Z"
+}
+```
+
+### `AutonomyKpis`
+
+Description: Derived on every read from the current action-class array — not stored.
+
+| Field | Type | Required | Nullable | Description |
+|---|---|---|---|---|
+| totalActionClasses | integer | Yes | No | |
+| eligibleToPromote | integer | Yes | No | count where `!atReversibilityCeiling` only — does not additionally check sample/accuracy/acceptance gates |
+| totalLiveDollarValue | number | Yes | No | sum of `liveDollarValue` across all action classes |
+| averageProofAccuracy | number | Yes | No | mean of `accuracy` across all action classes, rounded to 3 decimals |
+
+Constraints: Required: `totalActionClasses`, `eligibleToPromote`, `totalLiveDollarValue`, `averageProofAccuracy`
+
+Example (generated from schema):
+
+```json
+{
+  "totalActionClasses": 0,
+  "eligibleToPromote": 0,
+  "totalLiveDollarValue": 0,
+  "averageProofAccuracy": 0
+}
+```
+
+### `AutonomyRosterView`
+
+Description: [NOT SPECIFIED]
+
+| Field | Type | Required | Nullable | Description |
+|---|---|---|---|---|
+| kpis | `AutonomyKpis` | Yes | No | |
+| actionClasses | array of `ActionClassEntity` | Yes | No | |
+| liveActions | array of `LiveActionEntity` | No | No | Optional only so the SLICE-11 preparation-phase contract test's mock (predating this field) still type-checks unmodified — the real endpoint always populates it |
+| killSwitchEngaged | boolean | Yes | No | |
+
+Constraints: Required: `kpis`, `actionClasses`, `killSwitchEngaged`
+
+Example (generated from schema):
+
+```json
+{
+  "kpis": { "totalActionClasses": 0, "eligibleToPromote": 0, "totalLiveDollarValue": 0, "averageProofAccuracy": 0 },
+  "actionClasses": [{ "id": 0, "name": "string", "trustRung": "Manual", "reversibilityClass": "Low", "atReversibilityCeiling": false, "sampleCount": 0, "accuracy": 0, "acceptanceRate": 0, "liveDollarValue": 0, "createdAt": "2026-08-01T00:00:00.000Z" }],
+  "liveActions": [{ "id": 0, "actionClassId": 0, "description": "string", "status": "pending", "vetoWindowSeconds": 0, "engagedAt": "2026-08-01T00:00:00.000Z" }],
+  "killSwitchEngaged": false
 }
 ```
 
@@ -6898,6 +7713,52 @@ Example (generated from schema):
 ```json
 {
   "status": "ok"
+}
+```
+
+### `KillSwitchState`
+
+Description: [NOT SPECIFIED]
+
+| Field | Type | Required | Nullable | Description |
+|---|---|---|---|---|
+| killSwitchEngaged | boolean | Yes | No | |
+
+Constraints: Required: `killSwitchEngaged`
+
+Example (generated from schema):
+
+```json
+{
+  "killSwitchEngaged": false
+}
+```
+
+### `LiveActionEntity`
+
+Description: Tier-1 canonical live (in-flight) autonomous action awaiting its veto window or already applied (SLICE-11).
+
+| Field | Type | Required | Nullable | Description |
+|---|---|---|---|---|
+| id | integer | Yes | No | |
+| actionClassId | integer | Yes | No | FK → ActionClassEntity.id |
+| description | string | Yes | No | |
+| status | string (enum: pending, vetoed, applied, undone) | Yes | No | |
+| vetoWindowSeconds | integer | Yes | No | initial countdown length; frontend computes remaining time client-side |
+| engagedAt | string (format: date-time) | Yes | No | |
+
+Constraints: Required: `id`, `actionClassId`, `description`, `status`, `vetoWindowSeconds`, `engagedAt`
+
+Example (generated from schema):
+
+```json
+{
+  "id": 0,
+  "actionClassId": 0,
+  "description": "string",
+  "status": "pending",
+  "vetoWindowSeconds": 0,
+  "engagedAt": "2026-08-01T00:00:00.000Z"
 }
 ```
 
